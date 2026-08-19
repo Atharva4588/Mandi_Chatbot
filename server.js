@@ -110,8 +110,9 @@ const mandiCoordinates = {
 
   // Nashik Region
   'nashik': { lat: 20.0059, lng: 73.7898 },
-  'lasalgaon': { lat: 20.1477, lng: 74.2253 },
+  'saykheda': { lat: 20.1000, lng: 74.0500 },
   'pimpalgaon': { lat: 20.1700, lng: 73.9800 },
+  'lasalgaon': { lat: 20.1477, lng: 74.2253 },
   'yeola': { lat: 20.0420, lng: 74.4870 },
   'sinnar': { lat: 19.8450, lng: 74.0000 },
   'malegaon': { lat: 20.5530, lng: 74.5290 },
@@ -242,19 +243,21 @@ mongoose.connect(MONGO_URI, {
   })
   .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
 
-// Distance using Turf.js
+// Realistic Road Distance Calculation (Applies 1.35x winding road multiplier)
 function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   if (!userLat || !userLng || !mandiLat || !mandiLng) return 9999;
   try {
     const from = point([userLng, userLat]);
     const to = point([mandiLng, mandiLat]);
-    return Math.round(distance(from, to, { units: 'kilometers' }));
+    const aerialKm = distance(from, to, { units: 'kilometers' });
+    const roadKm = Math.round(aerialKm * 1.35);
+    return roadKm;
   } catch (err) {
     return 9999;
   }
 }
 
-// Dynamic Coordinate Matcher
+// Dynamic Coordinate Lookup
 function getQuickCoordinates(marketName = '', districtName = '') {
   const textToSearch = `${marketName} ${districtName}`.toLowerCase().replace(/[\(\),]/g, ' ');
   const words = textToSearch.split(/\s+/);
@@ -274,7 +277,7 @@ function getQuickCoordinates(marketName = '', districtName = '') {
   return { lat: 19.7515, lng: 75.7139 };
 }
 
-// ML Service Connector
+// ML Prediction Service Connector
 async function fetchMLPrediction(mandiName, commodity, currentPrice) {
   try {
     const response = await axios.post(`${ML_SERVICE_URL}/predict`, {
@@ -302,7 +305,7 @@ async function fetchMLPrediction(mandiName, commodity, currentPrice) {
   }
 }
 
-// Agmarknet Sync Engine
+// Daily Agmarknet Sync Function
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
@@ -353,7 +356,7 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   return { message: `Synced ${totalCount} live market records across Maharashtra!` };
 }
 
-// Web Health Routes
+// Web Server Routes
 app.get('/', (req, res) => res.send('🌾 Mandi Price Arbitrage API 24/7 active!'));
 
 app.get('/api/sync-agmarknet', async (req, res) => {
@@ -365,12 +368,12 @@ app.get('/api/sync-agmarknet', async (req, res) => {
   }
 });
 
-// Render Results with Strict Per-User Location Checking
+// Render Arbitrage Results with Strict 100km Geofence
 async function renderArbitrageResults(chatId, sortBy = 'profit') {
   const chatIdKey = String(chatId);
   let userLoc = userLocations[chatIdKey];
 
-  // 1. Look up user's own location from MongoDB
+  // Retrieve persistent location from database if missing from memory
   if (!userLoc) {
     try {
       const savedUser = await User.findOne({ chatId: chatIdKey });
@@ -383,7 +386,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     }
   }
 
-  // 2. Strict check: prompt new users who haven't sent a location yet
+  // Request location from new users who have not shared coordinates yet
   if (!userLoc) {
     const opts = {
       parse_mode: 'Markdown',
@@ -395,7 +398,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     };
     return bot.sendMessage(
       chatId,
-      `📍 *Please share your location first!*\n\nTap the button below to calculate the closest mandis and transport profit for your area.`,
+      `📍 *Please share your location first!*\n\nTap the button below so I can find mandis and calculate transport profits for your area.`,
       opts
     );
   }
@@ -426,7 +429,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   }
   const mandis = Array.from(uniqueMandiMap.values());
 
-  // Compute accurate distances and profits based strictly on this user's GPS
+  // Compute road distances and profits
   let recommendations = mandis.map(mandi => {
     let calcDistance = 9999;
 
@@ -451,7 +454,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     };
   });
 
-  // 100 km Radius Filter
+  // Strict 100 km Radius Filter
   let filteredWithin100Km = recommendations.filter(item => item.dist <= maxDistanceKm);
   let displayList = filteredWithin100Km;
   let radiusNote = '(Max 100 km Radius)';
@@ -525,7 +528,7 @@ try {
 
   console.log('🤖 Telegram Bot initialized and polling 24/7...');
 
-  // Per-User Location Handler (saves to MongoDB)
+  // Location Receiver
   bot.on('location', async (msg) => {
     const chatIdKey = String(msg.chat.id);
     const { latitude, longitude } = msg.location;
@@ -548,6 +551,7 @@ try {
     );
   });
 
+  // Voice Note Handler
   bot.on('voice', async (msg) => {
     const chatId = msg.chat.id;
     const chatIdKey = String(chatId);
@@ -611,6 +615,7 @@ try {
     }
   });
 
+  // Sorting Toggle Handler
   bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const action = callbackQuery.data;
@@ -624,6 +629,7 @@ try {
     }
   });
 
+  // Text Message Handler
   bot.on('message', async (msg) => {
     if (msg.location || msg.voice) return;
 
