@@ -63,9 +63,9 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
-// Accurate Geolocation Dictionary for All Mandis & Districts
+// Geolocation Dictionary for Mandis & Districts
 const mandiCoordinates = {
-  // Mumbai & MMR
+  // Mumbai & MMR (<45 km)
   'vashi': { lat: 19.0770, lng: 73.0000 },
   'turbhe': { lat: 19.0770, lng: 73.0000 },
   'navi mumbai': { lat: 19.0330, lng: 73.0297 },
@@ -82,7 +82,7 @@ const mandiCoordinates = {
   'alibag': { lat: 18.6414, lng: 72.8722 },
   'raigad': { lat: 18.5158, lng: 73.1822 },
 
-  // Ahmednagar / Ahilyanagar
+  // Ahmednagar / Ahilyanagar (~180 - 240 km)
   'ahilyanagar': { lat: 19.0948, lng: 74.7480 },
   'ahmednagar': { lat: 19.0948, lng: 74.7480 },
   'newasa': { lat: 19.5525, lng: 74.9255 },
@@ -96,7 +96,7 @@ const mandiCoordinates = {
   'pathardi': { lat: 19.1700, lng: 75.1800 },
   'jamkhed': { lat: 18.7200, lng: 75.3200 },
 
-  // Pune Region
+  // Pune Region (~110 - 160 km)
   'pune': { lat: 18.5204, lng: 73.8567 },
   'khadki': { lat: 18.5630, lng: 73.8340 },
   'pimpri': { lat: 18.6298, lng: 73.7997 },
@@ -108,7 +108,7 @@ const mandiCoordinates = {
   'daund': { lat: 18.4600, lng: 74.5800 },
   'bhor': { lat: 18.1600, lng: 73.8400 },
 
-  // Nashik Region
+  // Nashik Region (~140 - 200 km)
   'nashik': { lat: 20.0059, lng: 73.7898 },
   'saykheda': { lat: 20.1000, lng: 74.0500 },
   'pimpalgaon': { lat: 20.1700, lng: 73.9800 },
@@ -119,7 +119,8 @@ const mandiCoordinates = {
   'chandwad': { lat: 20.3270, lng: 74.2400 },
   'kalwan': { lat: 20.4870, lng: 73.9870 },
 
-  // Other Maharashtra Districts
+  // Dhule & Other Districts (>300 km)
+  'dhule': { lat: 20.9042, lng: 74.7749 },
   'nagpur': { lat: 21.1458, lng: 79.0882 },
   'chhatrapati sambhajinagar': { lat: 19.8762, lng: 75.3433 },
   'sambhajinagar': { lat: 19.8762, lng: 75.3433 },
@@ -131,10 +132,8 @@ const mandiCoordinates = {
   'latur': { lat: 18.4088, lng: 76.5604 },
   'nanded': { lat: 19.1383, lng: 77.3210 },
   'amravati': { lat: 20.9374, lng: 77.7796 },
-  'amrawati': { lat: 20.9374, lng: 77.7796 },
   'akola': { lat: 20.7002, lng: 77.0082 },
   'jalgaon': { lat: 21.0077, lng: 75.5626 },
-  'dhule': { lat: 20.9042, lng: 74.7749 },
   'parbhani': { lat: 19.2608, lng: 76.7749 },
   'yavatmal': { lat: 20.3888, lng: 78.1204 },
   'hingoli': { lat: 19.7196, lng: 77.1485 },
@@ -243,15 +242,14 @@ mongoose.connect(MONGO_URI, {
   })
   .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
 
-// Realistic Road Distance Calculation (Applies 1.35x winding road multiplier)
+// Realistic Road Distance Calculation (1.35x winding road multiplier)
 function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   if (!userLat || !userLng || !mandiLat || !mandiLng) return 9999;
   try {
     const from = point([userLng, userLat]);
     const to = point([mandiLng, mandiLat]);
     const aerialKm = distance(from, to, { units: 'kilometers' });
-    const roadKm = Math.round(aerialKm * 1.35);
-    return roadKm;
+    return Math.round(aerialKm * 1.35);
   } catch (err) {
     return 9999;
   }
@@ -368,12 +366,11 @@ app.get('/api/sync-agmarknet', async (req, res) => {
   }
 });
 
-// Render Arbitrage Results with Strict 100km Geofence
+// Render Arbitrage Results with Strict Hard Cutoff (<= 100 km)
 async function renderArbitrageResults(chatId, sortBy = 'profit') {
   const chatIdKey = String(chatId);
   let userLoc = userLocations[chatIdKey];
 
-  // Retrieve persistent location from database if missing from memory
   if (!userLoc) {
     try {
       const savedUser = await User.findOne({ chatId: chatIdKey });
@@ -386,7 +383,6 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     }
   }
 
-  // Request location from new users who have not shared coordinates yet
   if (!userLoc) {
     const opts = {
       parse_mode: 'Markdown',
@@ -398,7 +394,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     };
     return bot.sendMessage(
       chatId,
-      `📍 *Please share your location first!*\n\nTap the button below so I can find mandis and calculate transport profits for your area.`,
+      `📍 *Please share your location first!*\n\nTap the button below so I can calculate profits for mandis within 100 km of your area.`,
       opts
     );
   }
@@ -454,21 +450,21 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     };
   });
 
-  // Strict 100 km Radius Filter
-  let filteredWithin100Km = recommendations.filter(item => item.dist <= maxDistanceKm);
-  let displayList = filteredWithin100Km;
-  let radiusNote = '(Max 100 km Radius)';
+  // Strict Hard Cutoff at 100 km (No fallback expansion beyond 100 km)
+  let displayList = recommendations.filter(item => item.dist <= maxDistanceKm);
 
-  if (filteredWithin100Km.length === 0) {
-    recommendations.sort((a, b) => a.dist - b.dist);
-    displayList = recommendations.slice(0, 3);
-    radiusNote = '(Showing Nearest Available Beyond 100 km)';
-  } else {
-    if (sortBy === 'profit') {
-      displayList.sort((a, b) => b.net - a.net);
-    } else if (sortBy === 'distance') {
-      displayList.sort((a, b) => a.dist - b.dist);
-    }
+  if (displayList.length === 0) {
+    return bot.sendMessage(
+      chatId,
+      `🚫 *No active APMC mandis found within your 100 km radius for ${commodity}.*\n\nAll markets reporting trades for this crop are located further away.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  if (sortBy === 'profit') {
+    displayList.sort((a, b) => b.net - a.net);
+  } else if (sortBy === 'distance') {
+    displayList.sort((a, b) => a.dist - b.dist);
   }
 
   const top = displayList[0];
@@ -477,7 +473,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   const mlData = await fetchMLPrediction(top.name, commodity, top.price);
 
   let reply = `📊 *Arbitrage Results for ${quantityQuintals} Quintals of ${commodity}*\n`;
-  reply += `🎯 *Mode:* ${sortModeLabel} ${radiusNote}\n\n`;
+  reply += `🎯 *Mode:* ${sortModeLabel} (Max 100 km Radius)\n\n`;
 
   reply += `🏆 *RECOMMENDED TODAY:* ${top.name} (${top.district})\n`;
   reply += `💰 Price Today: ₹${top.price}/quintal\n`;
@@ -490,7 +486,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     reply += `💡 *Advice:* ${mlData.recommendation} — ${mlData.advice || ''}\n\n`;
   }
 
-  reply += `*Available Mandis:* \n`;
+  reply += `*Available Mandis (Within 100 km):* \n`;
   displayList.slice(0, 5).forEach((item, index) => {
     reply += `${index + 1}. *${item.name}* (${item.district}) - Net: ₹${item.net.toLocaleString('en-IN')} (${item.dist} km @ ₹${item.price}/q)\n`;
   });
