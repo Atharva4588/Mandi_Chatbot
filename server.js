@@ -54,9 +54,18 @@ const groq = new Groq({ apiKey: GROQ_API_KEY || 'dummy_key' });
 const app = express();
 app.use(express.json());
 
+// Persistent User Location Schema in MongoDB
+const userSchema = new mongoose.Schema({
+  chatId: { type: String, required: true, unique: true },
+  latitude: { type: Number, required: true },
+  longitude: { type: Number, required: true },
+  updatedAt: { type: Date, default: Date.now }
+});
+const User = mongoose.models.User || mongoose.model('User', userSchema);
+
 // Accurate Geolocation Dictionary for All Mandis & Districts
 const mandiCoordinates = {
-  // Mumbai & MMR (0 - 45 km radius from Navi Mumbai)
+  // Mumbai & MMR
   'vashi': { lat: 19.0770, lng: 73.0000 },
   'turbhe': { lat: 19.0770, lng: 73.0000 },
   'navi mumbai': { lat: 19.0330, lng: 73.0297 },
@@ -73,7 +82,7 @@ const mandiCoordinates = {
   'alibag': { lat: 18.6414, lng: 72.8722 },
   'raigad': { lat: 18.5158, lng: 73.1822 },
 
-  // Ahmednagar / Ahilyanagar (~180 - 240 km from Navi Mumbai)
+  // Ahmednagar / Ahilyanagar
   'ahilyanagar': { lat: 19.0948, lng: 74.7480 },
   'ahmednagar': { lat: 19.0948, lng: 74.7480 },
   'newasa': { lat: 19.5525, lng: 74.9255 },
@@ -87,7 +96,7 @@ const mandiCoordinates = {
   'pathardi': { lat: 19.1700, lng: 75.1800 },
   'jamkhed': { lat: 18.7200, lng: 75.3200 },
 
-  // Pune Region (~110 - 160 km)
+  // Pune Region
   'pune': { lat: 18.5204, lng: 73.8567 },
   'khadki': { lat: 18.5630, lng: 73.8340 },
   'pimpri': { lat: 18.6298, lng: 73.7997 },
@@ -99,7 +108,7 @@ const mandiCoordinates = {
   'daund': { lat: 18.4600, lng: 74.5800 },
   'bhor': { lat: 18.1600, lng: 73.8400 },
 
-  // Nashik Region (~140 - 200 km)
+  // Nashik Region
   'nashik': { lat: 20.0059, lng: 73.7898 },
   'lasalgaon': { lat: 20.1477, lng: 74.2253 },
   'pimpalgaon': { lat: 20.1700, lng: 73.9800 },
@@ -109,7 +118,7 @@ const mandiCoordinates = {
   'chandwad': { lat: 20.3270, lng: 74.2400 },
   'kalwan': { lat: 20.4870, lng: 73.9870 },
 
-  // Other Maharashtra Districts (>200 km)
+  // Other Maharashtra Districts
   'nagpur': { lat: 21.1458, lng: 79.0882 },
   'chhatrapati sambhajinagar': { lat: 19.8762, lng: 75.3433 },
   'sambhajinagar': { lat: 19.8762, lng: 75.3433 },
@@ -128,22 +137,10 @@ const mandiCoordinates = {
   'parbhani': { lat: 19.2608, lng: 76.7749 },
   'yavatmal': { lat: 20.3888, lng: 78.1204 },
   'hingoli': { lat: 19.7196, lng: 77.1485 },
-  'ratnagiri': { lat: 16.9902, lng: 73.3120 },
-  'sindhudurg': { lat: 16.1158, lng: 73.6981 },
-  'beed': { lat: 18.9891, lng: 75.7601 },
-  'osmanabad': { lat: 18.1853, lng: 76.0419 },
-  'dharashiv': { lat: 18.1853, lng: 76.0419 },
-  'wardha': { lat: 20.7453, lng: 78.6022 },
-  'bhandara': { lat: 21.1714, lng: 79.6547 },
-  'gondia': { lat: 21.4604, lng: 80.1961 },
-  'chandrapur': { lat: 19.9615, lng: 79.2961 },
-  'gadchiroli': { lat: 20.1849, lng: 79.9948 },
-  'buldhana': { lat: 20.5293, lng: 76.1843 },
-  'washim': { lat: 20.1110, lng: 77.1350 },
-  'nandurbar': { lat: 21.3739, lng: 74.2404 }
+  'ratnagiri': { lat: 16.9902, lng: 73.3120 }
 };
 
-// Crop Normalization
+// Crop Normalization Engine
 const commodityAliases = {
   'sweet potato': 'Sweet Potato',
   'sweetpotato': 'Sweet Potato',
@@ -228,7 +225,7 @@ function normalizeCommodity(inputStr) {
   return commodityAliases[clean] || inputStr;
 }
 
-// Memory Stores
+// In-Memory Session Cache
 const userLocations = {};
 const userQueries = {};
 
@@ -257,7 +254,7 @@ function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   }
 }
 
-// Dynamic Coordinate Lookup
+// Dynamic Coordinate Matcher
 function getQuickCoordinates(marketName = '', districtName = '') {
   const textToSearch = `${marketName} ${districtName}`.toLowerCase().replace(/[\(\),]/g, ' ');
   const words = textToSearch.split(/\s+/);
@@ -274,11 +271,10 @@ function getQuickCoordinates(marketName = '', districtName = '') {
     }
   }
 
-  // Realistic regional fallback if unknown
   return { lat: 19.7515, lng: 75.7139 };
 }
 
-// Python ML Service Connector
+// ML Service Connector
 async function fetchMLPrediction(mandiName, commodity, currentPrice) {
   try {
     const response = await axios.post(`${ML_SERVICE_URL}/predict`, {
@@ -290,7 +286,7 @@ async function fetchMLPrediction(mandiName, commodity, currentPrice) {
 
     return response.data;
   } catch (err) {
-    console.warn(`⚠️ ML Microservice (${ML_SERVICE_URL}) standby or waking up:`, err.message);
+    console.warn(`⚠️ ML Microservice (${ML_SERVICE_URL}) fallback triggered:`, err.message);
     const predictedPriceDay2 = Math.round(currentPrice * 1.02);
     const priceDiff = Math.round(predictedPriceDay2 - currentPrice);
     return {
@@ -306,7 +302,7 @@ async function fetchMLPrediction(mandiName, commodity, currentPrice) {
   }
 }
 
-// Live Government API Sync
+// Agmarknet Sync Engine
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
@@ -357,7 +353,7 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   return { message: `Synced ${totalCount} live market records across Maharashtra!` };
 }
 
-// Health Check Endpoint
+// Web Health Routes
 app.get('/', (req, res) => res.send('🌾 Mandi Price Arbitrage API 24/7 active!'));
 
 app.get('/api/sync-agmarknet', async (req, res) => {
@@ -369,12 +365,42 @@ app.get('/api/sync-agmarknet', async (req, res) => {
   }
 });
 
-// Render Arbitrage Results with 100 km Radius Filtering
+// Render Results with Strict Per-User Location Checking
 async function renderArbitrageResults(chatId, sortBy = 'profit') {
   const chatIdKey = String(chatId);
-  const userLoc = userLocations[chatIdKey];
-  const query = userQueries[chatIdKey];
+  let userLoc = userLocations[chatIdKey];
 
+  // 1. Look up user's own location from MongoDB
+  if (!userLoc) {
+    try {
+      const savedUser = await User.findOne({ chatId: chatIdKey });
+      if (savedUser) {
+        userLoc = { latitude: savedUser.latitude, longitude: savedUser.longitude };
+        userLocations[chatIdKey] = userLoc;
+      }
+    } catch (e) {
+      console.warn('Could not query User model:', e.message);
+    }
+  }
+
+  // 2. Strict check: prompt new users who haven't sent a location yet
+  if (!userLoc) {
+    const opts = {
+      parse_mode: 'Markdown',
+      reply_markup: JSON.stringify({
+        keyboard: [[{ text: '📍 Share Current Location', request_location: true }]],
+        resize_keyboard: true,
+        one_time_keyboard: false
+      })
+    };
+    return bot.sendMessage(
+      chatId,
+      `📍 *Please share your location first!*\n\nTap the button below to calculate the closest mandis and transport profit for your area.`,
+      opts
+    );
+  }
+
+  const query = userQueries[chatIdKey];
   if (!query) return;
 
   const { rawCommodity, quantityQuintals } = query;
@@ -400,18 +426,16 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   }
   const mandis = Array.from(uniqueMandiMap.values());
 
-  // Compute accurate distances and profits
+  // Compute accurate distances and profits based strictly on this user's GPS
   let recommendations = mandis.map(mandi => {
     let calcDistance = 9999;
 
-    if (userLoc && userLoc.latitude && userLoc.longitude) {
-      const coords = getQuickCoordinates(mandi.mandiName, mandi.district);
-      const targetLat = mandi.latitude || coords.lat;
-      const targetLng = mandi.longitude || coords.lng;
+    const coords = getQuickCoordinates(mandi.mandiName, mandi.district);
+    const targetLat = mandi.latitude || coords.lat;
+    const targetLng = mandi.longitude || coords.lng;
 
-      if (targetLat && targetLng) {
-        calcDistance = calculateKmDistance(userLoc.latitude, userLoc.longitude, targetLat, targetLng);
-      }
+    if (targetLat && targetLng && userLoc.latitude && userLoc.longitude) {
+      calcDistance = calculateKmDistance(userLoc.latitude, userLoc.longitude, targetLat, targetLng);
     }
 
     const grossIncome = mandi.modalPrice * quantityQuintals;
@@ -427,13 +451,8 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     };
   });
 
-  // Strict 100 km Radius Filter
-  let filteredWithin100Km = recommendations;
-  if (userLoc) {
-    filteredWithin100Km = recommendations.filter(item => item.dist <= maxDistanceKm);
-  }
-
-  // If no mandi found inside 100 km, pick closest available markets
+  // 100 km Radius Filter
+  let filteredWithin100Km = recommendations.filter(item => item.dist <= maxDistanceKm);
   let displayList = filteredWithin100Km;
   let radiusNote = '(Max 100 km Radius)';
 
@@ -506,14 +525,25 @@ try {
 
   console.log('🤖 Telegram Bot initialized and polling 24/7...');
 
-  bot.on('location', (msg) => {
+  // Per-User Location Handler (saves to MongoDB)
+  bot.on('location', async (msg) => {
     const chatIdKey = String(msg.chat.id);
     const { latitude, longitude } = msg.location;
     userLocations[chatIdKey] = { latitude, longitude };
 
+    try {
+      await User.findOneAndUpdate(
+        { chatId: chatIdKey },
+        { chatId: chatIdKey, latitude, longitude, updatedAt: new Date() },
+        { upsert: true, new: true }
+      );
+    } catch (dbErr) {
+      console.error('Error saving user location to DB:', dbErr.message);
+    }
+
     return bot.sendMessage(
       msg.chat.id,
-      `📍 *Location Saved!* (${latitude.toFixed(4)}, ${longitude.toFixed(4)})\n\nEnter your crop query or send a voice note (e.g. \`Sugarcane 20\`, \`Potato 30\`, or \`Chilly 10\`)!`,
+      `📍 *Location Saved!* (${latitude.toFixed(4)}, ${longitude.toFixed(4)})\n\nEnter your crop query or send a voice note (e.g. \`Onion 20\`, \`Potato 30\`, or \`Sugarcane 20\`)!`,
       { parse_mode: 'Markdown' }
     );
   });
