@@ -303,8 +303,8 @@ async function fetchMLPrediction(mandiName, commodity, currentPrice) {
         upperBound: Math.round(predictedPriceDay2 * 1.03)
       },
       recommendation: '🚀 HOLD 2 DAYS',
-      advice: `XGBoost momentum indicates mild upward trend (+2.0%). Normal selling advised.`,
-      modelUsed: 'XGBoost Heuristic Fallback'
+      advice: `Expected market trend indicates mild upward momentum (+2.0%). Normal selling advised.`,
+      modelUsed: 'Heuristic Fallback'
     };
   }
 }
@@ -491,7 +491,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
       ? ` (Expected: ₹${mlData.confidenceInterval.lowerBound} – ₹${mlData.confidenceInterval.upperBound})`
       : '';
 
-    reply += `🤖 *2-DAY XGBOOST FORECAST:*\n`;
+    reply += `📈 *Expected Market Rate in Next 2 Days:*\n`;
     reply += `🔮 Projected Price (Day +2): *₹${mlData.predictedPriceDay2}/quintal*${ciText}\n`;
     reply += `💡 *Advice:* ${mlData.recommendation} — ${mlData.advice || ''}\n\n`;
   }
