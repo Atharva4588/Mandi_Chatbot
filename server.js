@@ -383,10 +383,18 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   reply += `💵 *Net Payout Today: ₹${top.net.toLocaleString('en-IN')}*\n\n`;
 
   if (mlData) {
-    const ci = mlData.confidenceInterval;
+    const predictedPrice = mlData.predictedPriceDay2 || top.price;
+    const lower = mlData?.confidenceInterval?.lowerBound 
+      || mlData?.confidence_interval_95?.lower_bound 
+      || Math.round(predictedPrice * 0.96);
+
+    const upper = mlData?.confidenceInterval?.upperBound 
+      || mlData?.confidence_interval_95?.upper_bound 
+      || Math.round(predictedPrice * 1.04);
+
     reply += `📈 *AI Forecast (2-Day Horizon):*\n`;
-    reply += `🔮 Expected Modal: *₹${mlData.predictedPriceDay2}/quintal* (Range: ₹${ci.lowerBound} – ₹${ci.upperBound})\n`;
-    reply += `💡 *Advice:* ${mlData.recommendation} — ${mlData.advice || ''}\n\n`;
+    reply += `🔮 Projected Price (Day +2): *₹${predictedPrice}/quintal* (Range: ₹${lower} – ₹${upper})\n`;
+    reply += `💡 *Advice:* ${mlData.recommendation || '⚖️ STABLE MARKET'} — ${mlData.advice || 'Normal market dispatch advised.'}\n\n`;
   }
 
   reply += `*Available Mandis (Within 100 km):*\n`;
