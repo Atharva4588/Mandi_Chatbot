@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-// Enforce Google Public DNS for MongoDB Atlas SRV resolution
+// Google Public DNS resolution for MongoDB Atlas SRV
 const dns = require('dns');
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
@@ -46,7 +46,7 @@ const { point } = require('@turf/helpers');
 const TelegramBot = TelegramBotPackage.default || TelegramBotPackage;
 const Mandi = require('./models/Mandi');
 
-// Credentials & Endpoints
+// Configuration & Credentials
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8878208094:AAEBZ06revJ10sn92ETNky9jP5GWxNFK5gg';
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://atharvagdumbre_db_user:2ecBzFIed7vLhMtt@cluster0.icowgqz.mongodb.net/mandi_db?retryWrites=true&w=majority';
 const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
@@ -57,13 +57,9 @@ const groq = new Groq({ apiKey: GROQ_API_KEY || 'dummy_key' });
 
 const app = express();
 app.use(express.json());
-
-// Serve static assets for the B2B Web Portal from the public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ==========================================
-// 1. MONGOOSE DATA SCHEMAS
-// ==========================================
+// Database Schemas
 const userSchema = new mongoose.Schema({
   chatId: { type: String, required: true, unique: true },
   name: { type: String, default: 'Farmer' },
@@ -87,12 +83,13 @@ const cropCycleSchema = new mongoose.Schema({
   estimatedHarvestDate: { type: Date, required: true },
   acres: { type: Number, default: 1.0 },
   expectedQuintals: { type: Number, required: true },
+  imageUrl: { type: String, default: '' },
   status: { type: String, enum: ['SOWN', 'GROWING', 'HARVEST_READY', 'PROCURED'], default: 'GROWING' },
   createdAt: { type: Date, default: Date.now }
 });
 const CropCycle = mongoose.models.CropCycle || mongoose.model('CropCycle', cropCycleSchema);
 
-// Geolocation Dictionary for Mandis & Districts
+// Mandi Coordinates Map
 const mandiCoordinates = {
   'vashi': { lat: 19.0770, lng: 73.0000 },
   'turbhe': { lat: 19.0770, lng: 73.0000 },
@@ -137,7 +134,6 @@ const mandiCoordinates = {
   'kalwan': { lat: 20.4870, lng: 73.9870 }
 };
 
-// Commodity Normalizer
 const commodityAliases = {
   'onion': 'Onion', 'kanda': 'Onion', 'pyaz': 'Onion',
   'potato': 'Potato', 'batata': 'Potato', 'aloo': 'Potato',
@@ -167,24 +163,22 @@ function normalizeCommodity(inputStr) {
   return commodityAliases[clean] || inputStr;
 }
 
-// In-Memory Session Cache
 const userLocations = {};
 const userQueries = {};
 
-// MongoDB Atlas Connection
+// Database Initialization
 mongoose.connect(MONGO_URI, {
   serverSelectionTimeoutMS: 20000,
   socketTimeoutMS: 45000,
 })
   .then(() => {
-    console.log('✅ Successfully connected to MongoDB Atlas!');
+    console.log('✅ Connected to MongoDB Atlas!');
     fetchAndSyncAgmarknet('Maharashtra')
-      .then(res => console.log(`🚀 [Initial Boot Sync]: ${res.message}`))
+      .then(res => console.log(`🚀 [Boot Sync]: ${res.message}`))
       .catch(err => console.warn('⚠️ Boot sync warning:', err.message));
   })
   .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
 
-// Road Distance Calculation (1.35x winding road multiplier)
 function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   if (!userLat || !userLng || !mandiLat || !mandiLng) return 9999;
   try {
@@ -197,11 +191,9 @@ function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   }
 }
 
-// Dynamic Coordinate Lookup
 function getQuickCoordinates(marketName = '', districtName = '') {
   const textToSearch = `${marketName} ${districtName}`.toLowerCase().replace(/[\(\),]/g, ' ');
   const words = textToSearch.split(/\s+/);
-
   for (const [key, coords] of Object.entries(mandiCoordinates)) {
     if (textToSearch.includes(key)) return coords;
   }
@@ -211,20 +203,17 @@ function getQuickCoordinates(marketName = '', districtName = '') {
   return { lat: 19.7515, lng: 75.7139 };
 }
 
-// FastAPI ML Prediction Service Connector
 async function fetchMLPrediction(mandiName, commodity, currentPrice) {
   try {
     const response = await axios.post(`${ML_SERVICE_URL}/predict`, {
-      mandiName: mandiName,
-      commodity: commodity,
-      currentPrice: currentPrice,
+      mandiName,
+      commodity,
+      currentPrice,
       prices: [],
       arrivalsTonnes: 45.0
     }, { timeout: 15000 });
-
     return response.data;
   } catch (err) {
-    console.warn(`⚠️ ML Microservice fallback:`, err.message);
     const predictedPriceDay2 = Math.round(currentPrice * 1.02);
     return {
       mandiName,
@@ -243,12 +232,11 @@ async function fetchMLPrediction(mandiName, commodity, currentPrice) {
   }
 }
 
-// Dynamic B2B Quote API Connector
 async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, distanceKm, quantity) {
   try {
     const response = await axios.post(`${ML_SERVICE_URL}/dynamic-quote`, {
-      commodity: commodity,
-      market: market,
+      commodity,
+      market,
       current_modal_price: currentPrice,
       floor_price: floorPrice,
       distance_km: distanceKm,
@@ -261,7 +249,7 @@ async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, di
   }
 }
 
-// High-Speed Bulk Agmarknet Sync with Quality Grades (Min/Modal/Max)
+// Fast Bulk Sync Pipeline
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
@@ -270,7 +258,7 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
     const response = await axios.get(apiUrl, { timeout: 20000 });
     records = response.data.records || [];
   } catch (err) {
-    console.warn('⚠️ Agmarknet API warning:', err.message);
+    console.warn('⚠️ Agmarknet API fetch warning:', err.message);
   }
 
   if (records && records.length > 0) {
@@ -288,7 +276,6 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
       let maxP = parseFloat(item.max_price) || Math.round(modalP * 1.15);
 
       if (modalP > 0) {
-        // Normalize leafy bunch prices to quintals
         const isLeafy = leafyList.some(c => rawComm.toLowerCase().includes(c));
         if (isLeafy && modalP < 100) {
           modalP = Math.round(modalP * 250);
@@ -323,7 +310,7 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   return { message: `Synced ${totalCount} live market records with quality tiers!` };
 }
 
-// Render Arbitrage Results (With Grade A, B, and C Tiers)
+// Telegram Arbitrage Formatter
 async function renderArbitrageResults(chatId, sortBy = 'profit') {
   const chatIdKey = String(chatId);
   let userLoc = userLocations[chatIdKey];
@@ -452,9 +439,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   bot.sendMessage(chatId, reply, { parse_mode: 'Markdown', ...inlineButtons });
 }
 
-// ==========================================
-// 2. TELEGRAM BOT INITIALIZATION & EVENTS
-// ==========================================
+// Telegram Bot Engine
 let bot;
 try {
   bot = new TelegramBot(TELEGRAM_TOKEN, {
@@ -463,7 +448,6 @@ try {
 
   console.log('🤖 Telegram Bot initialized and polling 24/7...');
 
-  // Location Receiver
   bot.on('location', async (msg) => {
     const chatIdKey = String(msg.chat.id);
     const { latitude, longitude } = msg.location;
@@ -488,7 +472,28 @@ try {
     );
   });
 
-  // Voice Note Handler (Groq Whisper)
+  // Photo Quality Assay Handler
+  bot.on('photo', async (msg) => {
+    const chatIdKey = String(msg.chat.id);
+    const photoArray = msg.photo;
+    const highestResPhoto = photoArray[photoArray.length - 1];
+
+    try {
+      const fileLink = await bot.getFileLink(highestResPhoto.file_id);
+      const latestCrop = await CropCycle.findOne({ chatId: chatIdKey, status: 'GROWING' }).sort({ createdAt: -1 });
+
+      if (latestCrop) {
+        latestCrop.imageUrl = fileLink;
+        await latestCrop.save();
+        bot.sendMessage(msg.chat.id, `📸 *Assay Photo Attached!*\n\nImage successfully linked to your active *${latestCrop.commodity}* lot for B2B buyers to verify quality.`, { parse_mode: 'Markdown' });
+      } else {
+        bot.sendMessage(msg.chat.id, "⚠️ No active growing crop found. Use `/sow` first to register your crop.", { parse_mode: 'Markdown' });
+      }
+    } catch (err) {
+      bot.sendMessage(msg.chat.id, "❌ Failed to attach photo.");
+    }
+  });
+
   bot.on('voice', async (msg) => {
     const chatId = msg.chat.id;
     const chatIdKey = String(chatId);
@@ -526,7 +531,7 @@ try {
           bot.sendMessage(chatId, "⚠️ Couldn't extract crop and quantity. Please say e.g., *'Onion 20'*", { parse_mode: 'Markdown' });
         } catch (err) {
           if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
-          bot.sendMessage(chatId, "❌ Voice transcription error. Please check your Groq API key.");
+          bot.sendMessage(chatId, "❌ Voice transcription error.");
         }
       });
     } catch (err) {
@@ -535,7 +540,6 @@ try {
     }
   });
 
-  // Inline Button Callbacks
   bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const data = callbackQuery.data;
@@ -570,9 +574,8 @@ try {
     }
   });
 
-  // Text & Command Handler
   bot.on('message', async (msg) => {
-    if (msg.location || msg.voice) return;
+    if (msg.location || msg.voice || msg.photo) return;
     const chatId = msg.chat.id;
     const text = (msg.text || '').trim();
 
@@ -581,7 +584,7 @@ try {
     if (text === '/start') {
       return bot.sendMessage(
         chatId, 
-        "🌾 *Welcome to भावनेत्र (BhavNetra)!*\n\n1️⃣ Tap *'📍 Share Current Location'*\n2️⃣ Send crop & quantity (e.g., `Onion 20`, `Potato 50`)\n3️⃣ Use `/sow` to register your upcoming harvest!",
+        "🌾 *Welcome to भावनेत्र (BhavNetra)!*\n\n1️⃣ Tap *'📍 Share Current Location'*\n2️⃣ Send crop & quantity (e.g., `Onion 20`, `Potato 50`)\n3️⃣ Use `/sow` to register your upcoming harvest!\n4️⃣ Send a photo of your crop to attach an assay certificate.",
         {
           parse_mode: 'Markdown',
           reply_markup: JSON.stringify({
@@ -592,7 +595,6 @@ try {
       );
     }
 
-    // Explicit command handler for /sow
     if (text.startsWith('/sow')) {
       const parts = text.split(' ');
       if (parts.length < 4) {
@@ -618,12 +620,11 @@ try {
 
       return bot.sendMessage(
         chatId,
-        `✅ *Harvest Registered!*\n\n🌾 Crop: *${commodity}*\n📐 Area: *${acres} Acres*\n📦 Expected Yield: *${expectedQuintals} Quintals*\n🗓️ Expected Harvest: *${harvestDate.toDateString()}*\n\nWe will alert you with procurement contracts 10 days before harvest!`,
+        `✅ *Harvest Registered!*\n\n🌾 Crop: *${commodity}*\n📐 Area: *${acres} Acres*\n📦 Expected Yield: *${expectedQuintals} Quintals*\n🗓️ Expected Harvest: *${harvestDate.toDateString()}*\n\n💡 *Tip:* Send a photo of your field/crop right now to attach a visual quality assay!`,
         { parse_mode: 'Markdown' }
       );
     }
 
-    // Standard Crop Query Parser
     const parts = text.split(' ');
     if (parts.length >= 2) {
       const rawCommodity = parts[0];
@@ -641,13 +642,11 @@ try {
   console.error('❌ Failed to start Telegram Bot:', err.message);
 }
 
-// ==========================================
-// 3. SCHEDULED CRON JOBS
-// ==========================================
+// Scheduled Background Tasks
 cron.schedule('0 6 * * *', async () => {
   try {
     const res = await fetchAndSyncAgmarknet('Maharashtra');
-    console.log(`✅ [Sync Success]: ${res.message}`);
+    console.log(`✅ [Daily Sync Success]: ${res.message}`);
   } catch (e) {
     console.error('❌ Sync Error:', e.message);
   }
@@ -668,7 +667,7 @@ cron.schedule('0 8 * * *', async () => {
       const alertMsg = `🌾 *Your ${crop.commodity} Harvest is ~10 Days Away!*\n\n` +
                        `📦 Registered Volume: *${crop.expectedQuintals} Quintals* on *${crop.acres} Acres*\n` +
                        `🛡️ Want to lock in a guaranteed floor payout with zero transport costs?\n\n` +
-                       `Send: \`${crop.commodity} ${crop.expectedQuintals}\` to check live market rates and claim your contract!`;
+                       `Send: \`${crop.commodity} ${crop.expectedQuintals}\` to check live market rates!`;
 
       bot.sendMessage(crop.chatId, alertMsg, { parse_mode: 'Markdown' }).catch(() => {});
     }
@@ -677,9 +676,7 @@ cron.schedule('0 8 * * *', async () => {
   }
 }, { timezone: "Asia/Kolkata" });
 
-// ==========================================
-// 4. EXPRESS REST ROUTES & B2B API ENDPOINTS
-// ==========================================
+// Express API Routes
 app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine', timestamp: new Date() }));
 
 app.get('/api/sync-agmarknet', async (req, res) => {
@@ -773,6 +770,7 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
         commodity: crop.commodity,
         variety: crop.variety || 'Grade A Standard',
         volumeQuintals: crop.expectedQuintals,
+        imageUrl: crop.imageUrl || '',
         estimatedHarvestDate: crop.estimatedHarvestDate.toISOString().split('T')[0],
         daysRemaining: daysLeft,
         clusterOrigin: clusterName,
@@ -830,9 +828,7 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
   }
 });
 
-// ==========================================
-// 5. KEEP-ALIVE SELF-PING (24/7 AWAKE LOOP)
-// ==========================================
+// Keep-Alive Loop
 const SERVER_URL = process.env.RENDER_EXTERNAL_URL || 'https://mandi-telegram-bot.onrender.com';
 
 setInterval(async () => {
