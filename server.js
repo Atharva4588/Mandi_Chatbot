@@ -184,7 +184,7 @@ mongoose.connect(MONGO_URI, {
   })
   .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
 
-// Realistic Road Distance Calculation (1.35x winding road multiplier)
+// Road Distance Calculation (1.35x winding road multiplier)
 function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   if (!userLat || !userLng || !mandiLat || !mandiLng) return 9999;
   try {
@@ -224,7 +224,7 @@ async function fetchMLPrediction(mandiName, commodity, currentPrice) {
 
     return response.data;
   } catch (err) {
-    console.warn(`⚠️ ML Microservice (${ML_SERVICE_URL}) fallback triggered:`, err.message);
+    console.warn(`⚠️ ML Microservice fallback:`, err.message);
     const predictedPriceDay2 = Math.round(currentPrice * 1.02);
     return {
       mandiName,
@@ -257,12 +257,11 @@ async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, di
     }, { timeout: 15000 });
     return response.data;
   } catch (err) {
-    console.warn('⚠️ Dynamic quote microservice fallback:', err.message);
     return null;
   }
 }
 
-// High-Speed Bulk Agmarknet Sync with Unit Normalization
+// High-Speed Bulk Agmarknet Sync with Quality Grades (Min/Modal/Max)
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
@@ -271,7 +270,7 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
     const response = await axios.get(apiUrl, { timeout: 20000 });
     records = response.data.records || [];
   } catch (err) {
-    console.warn('⚠️ Agmarknet API fetch warning:', err.message);
+    console.warn('⚠️ Agmarknet API warning:', err.message);
   }
 
   if (records && records.length > 0) {
@@ -283,13 +282,18 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
       const districtName = item.district || 'Unknown';
       const rawComm = (item.commodity || '').split('(')[0].trim();
       const commodity = normalizeCommodity(rawComm);
-      let newPrice = parseFloat(item.modal_price) || 0;
 
-      if (newPrice > 0) {
-        // Unit Normalization: Scale per-bunch pricing up to standard ₹/quintal
+      let modalP = parseFloat(item.modal_price) || 0;
+      let minP = parseFloat(item.min_price) || Math.round(modalP * 0.85);
+      let maxP = parseFloat(item.max_price) || Math.round(modalP * 1.15);
+
+      if (modalP > 0) {
+        // Normalize leafy bunch prices to quintals
         const isLeafy = leafyList.some(c => rawComm.toLowerCase().includes(c));
-        if (isLeafy && newPrice < 100) {
-          newPrice = Math.round(newPrice * 250);
+        if (isLeafy && modalP < 100) {
+          modalP = Math.round(modalP * 250);
+          minP = Math.round(minP * 250);
+          maxP = Math.round(maxP * 250);
         }
 
         const coords = getQuickCoordinates(marketName, districtName);
@@ -298,8 +302,10 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
           district: districtName,
           mandiName: marketName,
           commodity: commodity,
-          modalPrice: newPrice,
-          previousPrice: newPrice,
+          modalPrice: modalP,
+          minPrice: minP,
+          maxPrice: maxP,
+          previousPrice: modalP,
           latitude: coords.lat,
           longitude: coords.lng,
           lastUpdated: new Date()
@@ -314,10 +320,10 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   }
 
   const totalCount = await Mandi.countDocuments();
-  return { message: `Fast synced ${totalCount} live market records across Maharashtra!` };
+  return { message: `Synced ${totalCount} live market records with quality tiers!` };
 }
 
-// Render Arbitrage Results (Strict Hard Cutoff <= 100 km)
+// Render Arbitrage Results (With Grade A, B, and C Tiers)
 async function renderArbitrageResults(chatId, sortBy = 'profit') {
   const chatIdKey = String(chatId);
   let userLoc = userLocations[chatIdKey];
@@ -374,12 +380,18 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
     const targetLat = mandi.latitude || coords.lat;
     const targetLng = mandi.longitude || coords.lng;
     const calcDistance = calculateKmDistance(userLoc.latitude, userLoc.longitude, targetLat, targetLng);
+    
+    const minP = mandi.minPrice && mandi.minPrice > 0 ? mandi.minPrice : Math.round(mandi.modalPrice * 0.85);
+    const maxP = mandi.maxPrice && mandi.maxPrice > 0 ? mandi.maxPrice : Math.round(mandi.modalPrice * 1.15);
+
     const grossIncome = mandi.modalPrice * quantityQuintals;
     const transportCost = calcDistance * transportRatePerKm;
     return {
       name: mandi.mandiName,
       district: mandi.district,
-      price: mandi.modalPrice,
+      modalPrice: mandi.modalPrice,
+      gradeAMax: maxP,
+      gradeCMin: minP,
       dist: calcDistance,
       net: grossIncome - transportCost
     };
@@ -394,32 +406,33 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   else if (sortBy === 'distance') displayList.sort((a, b) => a.dist - b.dist);
 
   const top = displayList[0];
-  const mlData = await fetchMLPrediction(top.name, commodity, top.price);
+  const mlData = await fetchMLPrediction(top.name, commodity, top.modalPrice);
 
   let reply = `🌾 *भावनेत्र (BhavNetra) — ${quantityQuintals} Quintals of ${commodity}*\n\n`;
   reply += `🏆 *RECOMMENDED APMC:* ${top.name} (${top.district})\n`;
-  reply += `💰 Price Today: ₹${top.price}/quintal\n`;
-  reply += `📍 Distance: ${top.dist} km\n`;
-  reply += `💵 *Net Payout Today: ₹${top.net.toLocaleString('en-IN')}*\n\n`;
+  reply += `📍 Distance: ${top.dist} km\n\n`;
+
+  reply += `📊 *Price by Quality Tiers:*\n`;
+  reply += `  🥇 *Grade A (Highest):* ₹${top.gradeAMax}/q\n`;
+  reply += `  🥈 *Grade B (Medium/Modal):* ₹${top.modalPrice}/q\n`;
+  reply += `  🥉 *Grade C (Fair/Lowest):* ₹${top.gradeCMin}/q\n\n`;
+
+  reply += `💵 *Est. Net Payout (Grade B): ₹${top.net.toLocaleString('en-IN')}*\n`;
+  reply += `_(After subtracting ₹${(top.dist * transportRatePerKm).toLocaleString('en-IN')} transport)_\n\n`;
 
   if (mlData) {
-    const predictedPrice = mlData.predictedPriceDay2 || top.price;
-    const lower = mlData?.confidenceInterval?.lowerBound 
-      || mlData?.confidence_interval_95?.lower_bound 
-      || Math.round(predictedPrice * 0.96);
-
-    const upper = mlData?.confidenceInterval?.upperBound 
-      || mlData?.confidence_interval_95?.upper_bound 
-      || Math.round(predictedPrice * 1.04);
+    const predictedPrice = mlData.predictedPriceDay2 || top.modalPrice;
+    const lower = mlData?.confidenceInterval?.lowerBound || Math.round(predictedPrice * 0.96);
+    const upper = mlData?.confidenceInterval?.upperBound || Math.round(predictedPrice * 1.04);
 
     reply += `📈 *AI Forecast (2-Day Horizon):*\n`;
-    reply += `🔮 Projected Price (Day +2): *₹${predictedPrice}/quintal* (Range: ₹${lower} – ₹${upper})\n`;
-    reply += `💡 *Advice:* ${mlData.recommendation || '⚖️ STABLE MARKET'} — ${mlData.advice || 'Normal market dispatch advised.'}\n\n`;
+    reply += `🔮 Projected Price: *₹${predictedPrice}/q* (Range: ₹${lower} – ₹${upper})\n`;
+    reply += `💡 *Advice:* ${mlData.recommendation || '⚖️ STABLE'} — ${mlData.advice || 'Standard dispatch advised.'}\n\n`;
   }
 
   reply += `*Available Mandis (Within 100 km):*\n`;
   displayList.slice(0, 4).forEach((item, idx) => {
-    reply += `${idx + 1}. *${item.name}* (${item.district}) - Net: ₹${item.net.toLocaleString('en-IN')} (${item.dist} km @ ₹${item.price}/q)\n`;
+    reply += `${idx + 1}. *${item.name}* — Grade A: ₹${item.gradeAMax}/q | Grade C: ₹${item.gradeCMin}/q (${item.dist} km)\n`;
   });
 
   const inlineButtons = {
@@ -430,7 +443,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
           { text: '📍 Closest Mandi', callback_data: 'sort_distance' }
         ],
         [
-          { text: '🏷️ Lock Farm-Gate Contract (Free Transport)', callback_data: `contract_${top.name}_${top.price}_${top.dist}` }
+          { text: '🏷️ Lock Farm-Gate Contract (Free Transport)', callback_data: `contract_${top.name}_${top.modalPrice}_${top.dist}` }
         ]
       ]
     }
@@ -631,9 +644,7 @@ try {
 // ==========================================
 // 3. SCHEDULED CRON JOBS
 // ==========================================
-// 1. Daily Agmarknet Sync (06:00 AM IST)
 cron.schedule('0 6 * * *', async () => {
-  console.log('⏰ Starting 6:00 AM Agmarknet sync...');
   try {
     const res = await fetchAndSyncAgmarknet('Maharashtra');
     console.log(`✅ [Sync Success]: ${res.message}`);
@@ -642,9 +653,7 @@ cron.schedule('0 6 * * *', async () => {
   }
 }, { timezone: "Asia/Kolkata" });
 
-// 2. Pre-Harvest Procurement Alert (08:00 AM IST)
 cron.schedule('0 8 * * *', async () => {
-  console.log('⏰ Scanning for crops approaching harvest (10-day window)...');
   try {
     const today = new Date();
     const tenDaysFromNow = new Date();
@@ -671,11 +680,8 @@ cron.schedule('0 8 * * *', async () => {
 // ==========================================
 // 4. EXPRESS REST ROUTES & B2B API ENDPOINTS
 // ==========================================
+app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine', timestamp: new Date() }));
 
-// Health check route
-app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine' }));
-
-// Fast Agmarknet Manual Trigger
 app.get('/api/sync-agmarknet', async (req, res) => {
   try {
     const result = await fetchAndSyncAgmarknet(req.query.state || 'Maharashtra');
@@ -685,7 +691,6 @@ app.get('/api/sync-agmarknet', async (req, res) => {
   }
 });
 
-// Admin Route to inspect all registered crop cycles
 app.get('/api/crop-cycles', async (req, res) => {
   try {
     const cycles = await CropCycle.find().sort({ createdAt: -1 });
@@ -695,7 +700,6 @@ app.get('/api/crop-cycles', async (req, res) => {
   }
 });
 
-// Live Agmarknet Mandi Benchmark Rates API
 app.get('/api/mandi-rates', async (req, res) => {
   try {
     const rawRates = await Mandi.find({ modalPrice: { $gt: 0 } })
@@ -715,6 +719,8 @@ app.get('/api/mandi-rates', async (req, res) => {
       mandi: m.mandiName,
       district: m.district,
       modalPrice: m.modalPrice,
+      minPrice: m.minPrice,
+      maxPrice: m.maxPrice,
       lastUpdated: m.lastUpdated
     }));
 
@@ -724,7 +730,6 @@ app.get('/api/mandi-rates', async (req, res) => {
   }
 });
 
-// Anonymized B2B Buyer Supply Feed Endpoint
 app.get('/api/b2b/supply-feed', async (req, res) => {
   try {
     const activeCrops = await CropCycle.find({
@@ -784,12 +789,10 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
       lots: anonymizedFeed
     });
   } catch (error) {
-    console.error('B2B Feed Error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch anonymized feed' });
   }
 });
 
-// B2B Contract Procurement RFQ Order Desk Endpoint
 app.post('/api/b2b/procure-lot', async (req, res) => {
   try {
     const { lotId, buyerName, buyerCompany, phone, deliveryLocation, deliveryAddress, orderedQuintals } = req.body;
@@ -808,7 +811,6 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
     }
     await crop.save();
 
-    // Direct Telegram Alert to the Farmer
     const farmerAlert = `🎉 *GOOD NEWS: Lot Procured!*\n\n` +
                         `📦 Booked Volume: *${qty} Quintals (${crop.commodity})*\n` +
                         `🏢 Institutional Buyer: *${buyerCompany}*\n` +
@@ -827,6 +829,17 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// ==========================================
+// 5. KEEP-ALIVE SELF-PING (24/7 AWAKE LOOP)
+// ==========================================
+const SERVER_URL = process.env.RENDER_EXTERNAL_URL || 'https://mandi-telegram-bot.onrender.com';
+
+setInterval(async () => {
+  try {
+    await axios.get(`${SERVER_URL}/api/health`, { timeout: 10000 });
+  } catch (err) {}
+}, 10 * 60 * 1000);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Node.js Server listening on port ${PORT}`));

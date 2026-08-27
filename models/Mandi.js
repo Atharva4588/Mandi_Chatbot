@@ -6,6 +6,8 @@ const mandiSchema = new mongoose.Schema({
   mandiName: String,
   commodity: String,
   modalPrice: Number,
+  minPrice: { type: Number, default: 0 },
+  maxPrice: { type: Number, default: 0 },
   previousPrice: { type: Number, default: 0 },
   latitude: { type: Number, default: 18.9220 },  // Default fallback coords (Mumbai region)
   longitude: { type: Number, default: 72.8347 },
