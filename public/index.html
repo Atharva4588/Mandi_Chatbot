@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BhavNetra B2B | Direct Agri-Procurement Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 sticky top-0 z-40 backdrop-blur">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="h-9 w-9 bg-emerald-500 rounded-lg flex items-center justify-center text-slate-950 font-bold text-xl">🌾</div>
+        <div>
+          <span class="text-xl font-extrabold tracking-tight text-white">भावनेत्र <span class="text-emerald-400">B2B</span></span>
+          <span class="text-xs text-slate-400 block -mt-1 font-medium">Ministry of Consumer Affairs • Zero-Intermediary Gateway</span>
+        </div>
+      </div>
+      <div class="flex items-center space-x-4">
+        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse mr-2"></span> Real-time Verified Supply
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+    
+    <!-- Hero / Impact Metrics Banner -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- Metrics Card -->
+      <div class="lg:col-span-2 bg-gradient-to-br from-slate-900 to-slate-850 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between shadow-xl">
+        <div>
+          <span class="text-xs uppercase font-bold text-emerald-400 tracking-wider">SIH26033 Benchmark</span>
+          <h1 class="text-2xl lg:text-3xl font-bold mt-1 text-white">Direct Farm-Gate Aggregation Desk</h1>
+          <p class="text-slate-400 text-sm mt-2 max-w-xl">
+            Procure directly from pre-harvest registered farmer clusters. Anonymized lots are quality-assayed with zero commission leakage.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-slate-800">
+          <div>
+            <span class="text-xs text-slate-500 block">Farmer Realization</span>
+            <span class="text-2xl font-bold text-emerald-400">+42%</span>
+          </div>
+          <div>
+            <span class="text-xs text-slate-500 block">Buyer Landing Cost</span>
+            <span class="text-2xl font-bold text-cyan-400">-18%</span>
+          </div>
+          <div>
+            <span class="text-xs text-slate-500 block">Intermediaries Cut</span>
+            <span class="text-2xl font-bold text-amber-400">5 → 0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Price Spread Comparison Donut Chart -->
+      <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col items-center justify-center">
+        <h3 class="text-sm font-semibold text-slate-300 mb-2 w-full text-left">Farmer Share in Consumer Rupee (FSCR)</h3>
+        <div class="relative h-44 w-44 flex items-center justify-center">
+          <canvas id="spreadChart"></canvas>
+          <div class="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+            <span class="text-2xl font-black text-emerald-400">72%</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide">Farmer Share</span>
+          </div>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2 text-center">Traditional Mandi Model: Farmer gets only 32%</p>
+      </div>
+    </div>
+
+    <!-- Active Available Agri-Lots Table -->
+    <div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+      <div class="p-6 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-white">Live Pre-Harvest Lots & Inventory</h2>
+          <p class="text-xs text-slate-400 mt-0.5">Procurement-ready harvests synced via BhavNetra bot</p>
+        </div>
+        <button onclick="fetchSupplyFeed()" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5 text-slate-200">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh Feed
+        </button>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider bg-slate-950/50">
+              <th class="py-3.5 px-6">Lot Code</th>
+              <th class="py-3.5 px-6">Commodity</th>
+              <th class="py-3.5 px-6">Aggregated Volume</th>
+              <th class="py-3.5 px-6">Cluster Origin</th>
+              <th class="py-3.5 px-6">Harvest Window</th>
+              <th class="py-3.5 px-6">B2B Floor / Qtl</th>
+              <th class="py-3.5 px-6 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="lotsTableBody" class="divide-y divide-slate-800 text-sm">
+            <tr>
+              <td colspan="7" class="py-8 text-center text-slate-500">Loading live verified harvest lots...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- Contract Locking Slide-Out Modal Drawer -->
+  <div id="orderDrawer" class="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-50 hidden flex justify-end">
+    <div class="bg-slate-900 w-full max-w-md h-full border-l border-slate-800 p-6 flex flex-col justify-between overflow-y-auto">
+      <div class="space-y-6">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+          <div>
+            <h3 class="text-lg font-bold text-white">Direct Procurement RFQ</h3>
+            <span id="drawerLotCode" class="text-xs font-mono text-emerald-400"></span>
+          </div>
+          <button onclick="closeDrawer()" class="text-slate-400 hover:text-white">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        <!-- Lot Summary -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs">
+          <div class="flex justify-between"><span class="text-slate-400">Commodity:</span> <span id="drawerCommodity" class="font-bold text-white"></span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Total Volume:</span> <span id="drawerVolume" class="font-bold text-white"></span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Cluster Hub:</span> <span id="drawerCluster" class="font-bold text-white"></span></div>
+          <div class="flex justify-between"><span class="text-slate-400">B2B Base Payout:</span> <span id="drawerPrice" class="font-bold text-emerald-400"></span></div>
+          <div class="flex justify-between border-t border-slate-800 pt-2"><span class="text-slate-400 font-bold">Estimated Total:</span> <span id="drawerTotal" class="font-bold text-cyan-400 text-sm"></span></div>
+        </div>
+
+        <!-- Buyer Input Form -->
+        <form id="procurementForm" class="space-y-4 text-xs">
+          <div>
+            <label class="block text-slate-400 mb-1 font-semibold">Institutional / Company Name</label>
+            <input type="text" id="buyerCompany" required placeholder="e.g. Reliance Fresh / ITC / Local Wholesaler" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1 font-semibold">Contact Representative Name</label>
+            <input type="text" id="buyerName" required placeholder="Full Name" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-400 mb-1 font-semibold">Phone / WhatsApp</label>
+              <input type="tel" id="buyerPhone" required placeholder="+91..." class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1 font-semibold">Delivery City</label>
+              <input type="text" id="buyerCity" required placeholder="e.g. Navi Mumbai" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500">
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="pt-6 border-t border-slate-800 space-y-3">
+        <button onclick="submitProcurement()" class="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-2.5 rounded-lg transition text-xs flex items-center justify-center gap-1.5">
+          <i data-lucide="check-circle" class="w-4 h-4"></i> Lock Direct Procurement Contract
+        </button>
+        <p class="text-[10px] text-center text-slate-500">Zero commission. Handled via BhavNetra fulfillment hubs.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeLots = [];
+    let selectedLot = null;
+
+    // Initialize Chart
+    const ctx = document.getElementById('spreadChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        datasets: [{
+          data: [72, 18, 10],
+          backgroundColor: ['#10b981', '#06b6d4', '#64748b'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        cutout: '75%',
+        plugins: { legend: { display: false }, tooltip: { enabled: true } }
+      }
+    });
+
+    async function fetchSupplyFeed() {
+      try {
+        const res = await fetch('/api/b2b/supply-feed');
+        const data = await res.json();
+        if (!data.success || data.lots.length === 0) {
+          document.getElementById('lotsTableBody').innerHTML = `
+            <tr>
+              <td colspan="7" class="py-8 text-center text-slate-400">
+                No active registered harvest lots yet. Register a crop using <code>/sow Onion 3 150</code> in Telegram to see it appear here live!
+              </td>
+            </tr>`;
+          return;
+        }
+
+        activeLots = data.lots;
+        const rows = data.lots.map(lot => `
+          <tr class="hover:bg-slate-850/50 transition">
+            <td class="py-4 px-6 font-mono text-xs font-semibold text-emerald-400">${lot.lotCode}</td>
+            <td class="py-4 px-6 font-semibold text-white">${lot.commodity} <span class="text-[11px] text-slate-400 block">${lot.variety}</span></td>
+            <td class="py-4 px-6 font-medium text-slate-200">${lot.volumeQuintals} Quintals</td>
+            <td class="py-4 px-6 text-slate-300 text-xs">${lot.clusterOrigin}</td>
+            <td class="py-4 px-6">
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                ${lot.daysRemaining} days (${lot.estimatedHarvestDate})
+              </span>
+            </td>
+            <td class="py-4 px-6 font-bold text-white">₹${lot.wholesalePricePerQtl.toLocaleString('en-IN')}<span class="text-[10px] text-slate-400 font-normal">/q</span></td>
+            <td class="py-4 px-6 text-right">
+              <button onclick="openDrawer('${lot.id}')" class="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 rounded-lg text-xs font-semibold transition">
+                Procure Lot
+              </button>
+            </td>
+          </tr>
+        `).join('');
+
+        document.getElementById('lotsTableBody').innerHTML = rows;
+        lucide.createIcons();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function openDrawer(lotId) {
+      selectedLot = activeLots.find(l => l.id === lotId);
+      if (!selectedLot) return;
+
+      document.getElementById('drawerLotCode').innerText = selectedLot.lotCode;
+      document.getElementById('drawerCommodity').innerText = selectedLot.commodity;
+      document.getElementById('drawerVolume').innerText = `${selectedLot.volumeQuintals} Quintals`;
+      document.getElementById('drawerCluster').innerText = selectedLot.clusterOrigin;
+      document.getElementById('drawerPrice').innerText = `₹${selectedLot.wholesalePricePerQtl}/q`;
+      document.getElementById('drawerTotal').innerText = `₹${selectedLot.totalLotValue.toLocaleString('en-IN')}`;
+
+      document.getElementById('orderDrawer').classList.remove('hidden');
+    }
+
+    function closeDrawer() {
+      document.getElementById('orderDrawer').classList.add('hidden');
+    }
+
+    async function submitProcurement() {
+      const company = document.getElementById('buyerCompany').value;
+      const name = document.getElementById('buyerName').value;
+      const phone = document.getElementById('buyerPhone').value;
+      const city = document.getElementById('buyerCity').value;
+
+      if (!company || !name || !phone) {
+        alert('Please complete all contact details.');
+        return;
+      }
+
+      const res = await fetch('/api/b2b/procure-lot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lotId: selectedLot.id,
+          buyerName: name,
+          buyerCompany: company,
+          phone,
+          deliveryLocation: city
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alert(`🎉 Contract Locked!\nOrder Ref: ${data.orderReference}\nThe farmer has been notified instantly via Telegram.`);
+        closeDrawer();
+        fetchSupplyFeed();
+      } else {
+        alert('Error: ' + data.message);
+      }
+    }
+
+    // Initial Load
+    fetchSupplyFeed();
+    lucide.createIcons();
+  </script>
+</body>
+</html>

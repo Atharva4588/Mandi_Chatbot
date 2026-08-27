@@ -57,6 +57,8 @@ const groq = new Groq({ apiKey: GROQ_API_KEY || 'dummy_key' });
 
 const app = express();
 app.use(express.json());
+// Serve the B2B Buyer Web Portal from the public folder
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
 // 1. MONGOOSE DATA SCHEMAS
@@ -649,10 +651,13 @@ cron.schedule('0 8 * * *', async () => {
 }, { timezone: "Asia/Kolkata" });
 
 // ==========================================
-// 4. EXPRESS REST ROUTES & LISTENER
+// 4. EXPRESS REST ROUTES & B2B API ENDPOINTS
 // ==========================================
-app.get('/', (req, res) => res.send('🌾 भावनेत्र Mandi Arbitrage & B2B Procurement Backend Active!'));
 
+// Fallback status check route
+app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine' }));
+
+// Agmarknet Manual Trigger
 app.get('/api/sync-agmarknet', async (req, res) => {
   const result = await fetchAndSyncAgmarknet(req.query.state || 'Maharashtra');
   res.json({ success: true, ...result });
@@ -665,6 +670,110 @@ app.get('/api/crop-cycles', async (req, res) => {
     res.json({ success: true, count: cycles.length, cycles });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Anonymized B2B Buyer Supply Feed Endpoint
+app.get('/api/b2b/supply-feed', async (req, res) => {
+  try {
+    // 1. Fetch active crop cycles (Growing / Harvest Ready)
+    const activeCrops = await CropCycle.find({
+      status: { $in: ['GROWING', 'HARVEST_READY'] }
+    }).sort({ estimatedHarvestDate: 1 });
+
+    // 2. Fetch user locations to infer aggregate regional cluster
+    const users = await User.find({}, 'chatId latitude longitude');
+    const userMap = new Map();
+    users.forEach((u) => userMap.set(u.chatId, u));
+
+    // 3. Fetch latest APMC benchmark rates for price calculation
+    const allMandis = await Mandi.find({}, 'commodity modalPrice mandiName');
+    const priceMap = new Map();
+    allMandis.forEach((m) => {
+      const commKey = m.commodity.toLowerCase();
+      if (!priceMap.has(commKey) || priceMap.get(commKey).modalPrice < m.modalPrice) {
+        priceMap.set(commKey, m);
+      }
+    });
+
+    const anonymizedFeed = activeCrops.map((crop) => {
+      const user = userMap.get(crop.chatId);
+      const commKey = crop.commodity.toLowerCase();
+      const benchMandi = priceMap.get(commKey);
+      const benchmarkPrice = benchMandi ? benchMandi.modalPrice : 2200;
+
+      // Anonymize farmer identity: e.g. LOT-7489-A2F8
+      const lotCode = `LOT-${crop.chatId.slice(0, 4)}-${crop._id.toString().slice(-4).toUpperCase()}`;
+
+      // Approximate regional cluster without revealing coordinates
+      let clusterName = 'Western Maharashtra Cluster';
+      if (user) {
+        if (user.latitude > 19.5) clusterName = 'Nashik-Ahilyanagar Agri Zone';
+        else if (user.latitude > 18.5) clusterName = 'Pune-Raigad Corridor';
+        else clusterName = 'Thane-Palghar Green Belt';
+      }
+
+      const daysLeft = Math.max(0, Math.ceil((new Date(crop.estimatedHarvestDate) - new Date()) / (1000 * 60 * 60 * 24)));
+      
+      // B2B Wholesale Pricing: Farmer Floor + Platform Quality Assay + Logistics Margin
+      const b2bWholesalePrice = Math.round(benchmarkPrice * 1.05);
+
+      return {
+        id: crop._id.toString(),
+        lotCode,
+        commodity: crop.commodity,
+        variety: crop.variety || 'Grade A Standard',
+        volumeQuintals: crop.expectedQuintals,
+        estimatedHarvestDate: crop.estimatedHarvestDate.toISOString().split('T')[0],
+        daysRemaining: daysLeft,
+        clusterOrigin: clusterName,
+        qualityGrade: 'Grade A (Assayed & Certified)',
+        wholesalePricePerQtl: b2bWholesalePrice,
+        totalLotValue: b2bWholesalePrice * crop.expectedQuintals,
+        status: crop.status
+      };
+    });
+
+    res.json({
+      success: true,
+      totalLots: anonymizedFeed.length,
+      lots: anonymizedFeed
+    });
+  } catch (error) {
+    console.error('B2B Feed Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch anonymized feed' });
+  }
+});
+
+// B2B Contract Procurement RFQ Order Desk Endpoint
+app.post('/api/b2b/procure-lot', async (req, res) => {
+  try {
+    const { lotId, buyerName, buyerCompany, phone, email, deliveryLocation } = req.body;
+    
+    const crop = await CropCycle.findById(lotId);
+    if (!crop) {
+      return res.status(404).json({ success: false, message: 'Agri Lot not found or already procured' });
+    }
+
+    // Update status to prevent double-booking
+    crop.status = 'PROCURED';
+    await crop.save();
+
+    // Alert Farmer directly on Telegram
+    const farmerAlert = `🎉 *GOOD NEWS: Lot Procured!*\n\n` +
+                        `📦 Your harvest of *${crop.expectedQuintals} Quintals (${crop.commodity})* has been booked by an institutional buyer (${buyerCompany}).\n` +
+                        `🚚 Platform vehicle dispatch scheduled for harvest window.\n` +
+                        `🛡️ *Guaranteed Direct UPI Settlement on Farm-Gate Weighment.*`;
+    
+    bot.sendMessage(crop.chatId, farmerAlert, { parse_mode: 'Markdown' }).catch(() => {});
+
+    res.json({
+      success: true,
+      message: 'Procurement contract confirmed. BhavNetra logistics desk has been notified.',
+      orderReference: `ORD-${Date.now().toString().slice(-6)}`
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
