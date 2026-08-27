@@ -125,7 +125,7 @@
     </div>
   </div>
 
-  <!-- MODAL 2: Procurement RFQ Drawer with Native Dynamic QR & WhatsApp -->
+  <!-- MODAL 2: Procurement RFQ Drawer with Dynamic QR & PDF Generation -->
   <div id="procureModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
       
@@ -200,7 +200,7 @@
         </form>
       </div>
 
-      <!-- Step 2: Escrow Confirmation with Dynamic QR & WhatsApp -->
+      <!-- Step 2: Escrow Confirmation with Dynamic QR, WhatsApp & PDF Download -->
       <div id="orderSuccessSection" class="hidden space-y-4 text-center">
         <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto text-2xl">
           ✓
@@ -220,9 +220,16 @@
         </div>
 
         <div class="space-y-2">
+          <!-- WhatsApp Button -->
           <button id="whatsappConfirmBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 rounded-lg text-xs shadow transition flex items-center justify-center gap-2">
             <span>💬</span> Open WhatsApp Procurement Confirmation
           </button>
+
+          <!-- PDF Contract Download Button -->
+          <button id="downloadPdfContractBtn" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 rounded-lg text-xs shadow transition flex items-center justify-center gap-2">
+            <span>📄</span> Download Tripartite Agreement PDF
+          </button>
+
           <button onclick="closeProcureModal(); fetchSupplyFeed();" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2 rounded-lg text-xs transition">
             Done
           </button>
@@ -360,7 +367,7 @@
                 <span class="text-[10px] text-slate-400">/q</span>
               </td>
               <td class="px-5 py-3 text-right">
-                <button onclick="openProcureModal('${lot.id}', '${lot.lotCode}', ${lot.wholesalePricePerQtl}, ${lot.volumeQuintals})"
+                <button onclick="openProcureModal('${lot.id}', '${lot.lotCode}', '${lot.commodity}', ${lot.wholesalePricePerQtl}, ${lot.volumeQuintals})"
                   class="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition">
                   Procure Lot
                 </button>
@@ -376,7 +383,10 @@
       }
     }
 
-    function openProcureModal(id, lotCode, price, volume) {
+    let selectedCropCommodity = 'Agri Produce';
+
+    function openProcureModal(id, lotCode, commodity, price, volume) {
+      selectedCropCommodity = commodity;
       document.getElementById('modalLotId').value = id;
       document.getElementById('modalLotCode').innerText = lotCode;
       document.getElementById('modalWholesalePrice').value = price;
@@ -445,12 +455,16 @@
           document.getElementById('successOrderRef').innerText = `Order Ref: ${data.orderReference}`;
           document.getElementById('qrAdvanceText').innerText = `Pay 10% Escrow Advance: ₹${advanceToken.toLocaleString('en-IN')}`;
 
-          // Native Dynamic UPI QR Image URL (No External JS required)
+          // Native Dynamic UPI QR Image URL
           const upiPayload = `upi://pay?pa=bhavnetra.escrow@icici&pn=BhavNetra_Escrow&am=${advanceToken}&cu=INR&tn=${data.orderReference}_${lotCode}`;
           const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiPayload)}`;
           document.getElementById('upiQrImage').src = qrApiUrl;
 
-          // WhatsApp Confirmation Link
+          // PDF Tripartite Agreement URL
+          const pdfUrl = `/api/b2b/contract-pdf/${data.orderReference}?buyerName=${encodeURIComponent(buyerName)}&buyerCompany=${encodeURIComponent(buyerCompany)}&phone=${encodeURIComponent(phone)}&deliveryLocation=${encodeURIComponent(deliveryLocation)}&commodity=${encodeURIComponent(selectedCropCommodity)}&lotCode=${encodeURIComponent(lotCode)}&quantity=${orderedQuintals}&price=${price}`;
+          document.getElementById('downloadPdfContractBtn').onclick = () => window.open(pdfUrl, '_blank');
+
+          // WhatsApp Confirmation URL
           const message = `*BhavNetra Institutional Procurement Confirmation*%0A%0A` +
                           `📦 Order Ref: *${data.orderReference}*%0A` +
                           `🌾 Lot Code: *${lotCode}*%0A` +

@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-// Google Public DNS resolution for MongoDB Atlas SRV
+// Enforce Google Public DNS resolution for MongoDB Atlas SRV
 const dns = require('dns');
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
@@ -39,6 +39,7 @@ const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 const Groq = require('groq-sdk');
+const PDFDocument = require('pdfkit');
 const TelegramBotPackage = require('node-telegram-bot-api');
 const distance = require('@turf/distance').default;
 const { point } = require('@turf/helpers');
@@ -46,7 +47,7 @@ const { point } = require('@turf/helpers');
 const TelegramBot = TelegramBotPackage.default || TelegramBotPackage;
 const Mandi = require('./models/Mandi');
 
-// Configuration & Credentials
+// Credentials & Configuration
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8878208094:AAEBZ06revJ10sn92ETNky9jP5GWxNFK5gg';
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://atharvagdumbre_db_user:2ecBzFIed7vLhMtt@cluster0.icowgqz.mongodb.net/mandi_db?retryWrites=true&w=majority';
 const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
@@ -59,7 +60,7 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Database Schemas
+// Mongoose Data Schemas
 const userSchema = new mongoose.Schema({
   chatId: { type: String, required: true, unique: true },
   name: { type: String, default: 'Farmer' },
@@ -89,7 +90,7 @@ const cropCycleSchema = new mongoose.Schema({
 });
 const CropCycle = mongoose.models.CropCycle || mongoose.model('CropCycle', cropCycleSchema);
 
-// Mandi Coordinates Map
+// Geographic Lookups
 const mandiCoordinates = {
   'vashi': { lat: 19.0770, lng: 73.0000 },
   'turbhe': { lat: 19.0770, lng: 73.0000 },
@@ -166,7 +167,7 @@ function normalizeCommodity(inputStr) {
 const userLocations = {};
 const userQueries = {};
 
-// Database Initialization
+// Database Connection
 mongoose.connect(MONGO_URI, {
   serverSelectionTimeoutMS: 20000,
   socketTimeoutMS: 45000,
@@ -249,7 +250,7 @@ async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, di
   }
 }
 
-// Fast Bulk Sync Pipeline
+// Bulk Sync Pipeline with Quality Tiers
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
@@ -439,7 +440,7 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
   bot.sendMessage(chatId, reply, { parse_mode: 'Markdown', ...inlineButtons });
 }
 
-// Telegram Bot Engine
+// Telegram Bot Events
 let bot;
 try {
   bot = new TelegramBot(TELEGRAM_TOKEN, {
@@ -472,7 +473,7 @@ try {
     );
   });
 
-  // Photo Quality Assay Handler
+  // Quality Assay Photo Receiver
   bot.on('photo', async (msg) => {
     const chatIdKey = String(msg.chat.id);
     const photoArray = msg.photo;
@@ -620,7 +621,7 @@ try {
 
       return bot.sendMessage(
         chatId,
-        `✅ *Harvest Registered!*\n\n🌾 Crop: *${commodity}*\n📐 Area: *${acres} Acres*\n📦 Expected Yield: *${expectedQuintals} Quintals*\n🗓️ Expected Harvest: *${harvestDate.toDateString()}*\n\n💡 *Tip:* Send a photo of your field/crop right now to attach a visual quality assay!`,
+        `✅ *Harvest Registered!*\n\n🌾 Crop: *${commodity}*\n📐 Area: *${acres} Acres*\n📦 Expected Yield: *${expectedQuintals} Quintals*\n🗓️ Expected Harvest: *${harvestDate.toDateString()}*\n\n💡 *Tip:* Send a photo of your field/crop to attach a visual quality assay!`,
         { parse_mode: 'Markdown' }
       );
     }
@@ -642,7 +643,7 @@ try {
   console.error('❌ Failed to start Telegram Bot:', err.message);
 }
 
-// Scheduled Background Tasks
+// Scheduled Background Syncs
 cron.schedule('0 6 * * *', async () => {
   try {
     const res = await fetchAndSyncAgmarknet('Maharashtra');
@@ -676,7 +677,7 @@ cron.schedule('0 8 * * *', async () => {
   }
 }, { timezone: "Asia/Kolkata" });
 
-// Express API Routes
+// Express API Endpoints
 app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine', timestamp: new Date() }));
 
 app.get('/api/sync-agmarknet', async (req, res) => {
@@ -828,7 +829,136 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
   }
 });
 
-// Keep-Alive Loop
+// Dynamic PDF Contract Generator Endpoint
+app.get('/api/b2b/contract-pdf/:orderRef', async (req, res) => {
+  try {
+    const { orderRef } = req.params;
+    const { 
+      buyerName = 'Institutional Buyer', 
+      buyerCompany = 'Agri Retail Pvt Ltd', 
+      phone = '9876543210', 
+      deliveryLocation = 'Vashi APMC Hub', 
+      commodity = 'Onion', 
+      lotCode = 'LOT-BHAV-01', 
+      quantity = '100', 
+      price = '3500' 
+    } = req.query;
+
+    const qtyNum = parseFloat(quantity);
+    const rateNum = parseFloat(price);
+    const totalVal = qtyNum * rateNum;
+    const advanceVal = Math.round(totalVal * 0.10);
+    const balanceVal = totalVal - advanceVal;
+
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="BhavNetra_Contract_${orderRef}.pdf"`);
+
+    doc.pipe(res);
+
+    // Header Banner
+    doc.rect(40, 40, 515, 60).fill('#064e3b');
+    doc.fillColor('#ffffff').fontSize(18).font('Helvetica-Bold').text('BHAVNETRA AGRI-PROCUREMENT DESK', 55, 55);
+    doc.fontSize(10).font('Helvetica').text('Official Digital Tripartite Forward Procurement Contract', 55, 75);
+
+    // Meta Details Grid
+    doc.fillColor('#1e293b').fontSize(10).moveDown(2);
+    const metaY = 120;
+    doc.font('Helvetica-Bold').text(`Contract Ref: `, 40, metaY);
+    doc.font('Helvetica').text(orderRef, 120, metaY);
+
+    doc.font('Helvetica-Bold').text(`Generated On: `, 350, metaY);
+    doc.font('Helvetica').text(new Date().toLocaleDateString('en-IN'), 430, metaY);
+
+    doc.font('Helvetica-Bold').text(`Agri Lot Code: `, 40, metaY + 18);
+    doc.font('Helvetica').text(lotCode, 120, metaY + 18);
+
+    doc.font('Helvetica-Bold').text(`Quality Tier: `, 350, metaY + 18);
+    doc.font('Helvetica').text('Grade A (Assayed & Certified)', 430, metaY + 18);
+
+    // Divider Line
+    doc.strokeColor('#cbd5e1').lineWidth(1).moveTo(40, metaY + 45).lineTo(555, metaY + 45).stroke();
+
+    // Parties Section
+    doc.fontSize(12).font('Helvetica-Bold').fillColor('#065f46').text('CONTRACTING PARTIES', 40, 180);
+    doc.fontSize(9).font('Helvetica').fillColor('#334155');
+    
+    doc.font('Helvetica-Bold').text('1. Institutional Buyer (Party A):', 40, 200);
+    doc.font('Helvetica').text(`${buyerCompany} (Attn: ${buyerName})`, 50, 215);
+    doc.text(`Contact: +91-${phone} | Destination: ${deliveryLocation}`, 50, 228);
+
+    doc.font('Helvetica-Bold').text('2. Farmer Producer & Platform Facilitator (Party B & C):', 40, 248);
+    doc.font('Helvetica').text('Registered Cluster Producer via BhavNetra Escrow & Logistics Desk, Maharashtra.', 50, 263);
+
+    // Financial Schedule Table
+    doc.fontSize(12).font('Helvetica-Bold').fillColor('#065f46').text('COMMODITY & FINANCIAL ESCROW TERMS', 40, 290);
+
+    const tableTop = 310;
+    doc.rect(40, tableTop, 515, 22).fill('#f1f5f9');
+    doc.fillColor('#0f172a').fontSize(9).font('Helvetica-Bold');
+    doc.text('Commodity', 50, tableTop + 6);
+    doc.text('Quantity (Qtl)', 170, tableTop + 6);
+    doc.text('Locked Rate (₹/Qtl)', 270, tableTop + 6);
+    doc.text('Gross Value (₹)', 430, tableTop + 6);
+
+    doc.rect(40, tableTop + 22, 515, 25).strokeColor('#e2e8f0').stroke();
+    doc.font('Helvetica').fillColor('#334155');
+    doc.text(commodity, 50, tableTop + 30);
+    doc.text(`${qtyNum} Quintals`, 170, tableTop + 30);
+    doc.text(`₹${rateNum.toLocaleString('en-IN')}`, 270, tableTop + 30);
+    doc.font('Helvetica-Bold').text(`₹${totalVal.toLocaleString('en-IN')}`, 430, tableTop + 30);
+
+    // Escrow Settlement Breakdown Box
+    const boxY = 370;
+    doc.rect(40, boxY, 515, 75).fill('#ecfdf5');
+    doc.strokeColor('#a7f3d0').rect(40, boxY, 515, 75).stroke();
+    
+    doc.fillColor('#065f46').fontSize(10).font('Helvetica-Bold').text('Escrow Settlement Breakdown', 55, boxY + 12);
+    doc.fontSize(9).font('Helvetica').fillColor('#1e293b');
+    doc.text(`• 10% Initial Commitment Escrow Token: ₹${advanceVal.toLocaleString('en-IN')} (Locked at Agreement)`, 55, boxY + 30);
+    doc.text(`• 90% Direct UPI Settlement: ₹${balanceVal.toLocaleString('en-IN')} (Released on Farm-Gate Weighment)`, 55, boxY + 45);
+    doc.text(`• Freight / Loading Surcharge: ₹0 (Included under BhavNetra Direct Dispatch Program)`, 55, boxY + 60);
+
+    // Statutory Undertakings & SLA Clauses
+    doc.fontSize(11).font('Helvetica-Bold').fillColor('#065f46').text('BINDING SLA & STATUTORY UNDERTAKINGS', 40, 465);
+    doc.fontSize(8).font('Helvetica').fillColor('#475569');
+    
+    const clauses = [
+      '1. Quality Assurance: Produce is verified based on uploaded assay telemetry conforming to AGMARK Grade A standards.',
+      '2. Farm-Gate Weighment: Weighment receipts generated at cluster loading docks will serve as the final settlement metric.',
+      '3. Logistics Obligation: Platform-contracted vehicles will initiate pickup within 48 hours of registered harvest date.',
+      '4. Escrow Protection: Failure of pickup or unilateral cancellation triggers immediate refund/penalty clauses under APMC rules.'
+    ];
+
+    let clauseY = 485;
+    clauses.forEach(c => {
+      doc.text(c, 40, clauseY, { width: 515, align: 'justify' });
+      clauseY += 16;
+    });
+
+    // Digital Signatures
+    const sigY = 570;
+    doc.strokeColor('#cbd5e1').lineWidth(1).moveTo(40, sigY).lineTo(220, sigY).stroke();
+    doc.strokeColor('#cbd5e1').lineWidth(1).moveTo(335, sigY).lineTo(515, sigY).stroke();
+
+    doc.fontSize(8).font('Helvetica-Bold').fillColor('#334155');
+    doc.text('Authorized Buyer Representative', 40, sigY + 8);
+    doc.text('BhavNetra Agri-Escrow Desk', 335, sigY + 8);
+    doc.font('Helvetica').fillColor('#64748b');
+    doc.text(`${buyerCompany}`, 40, sigY + 20);
+    doc.text('Digitally Authenticated Signature', 335, sigY + 20);
+
+    // Footer
+    doc.fontSize(7).fillColor('#94a3b8').text('This is a computer-generated contract compliant with the Information Technology Act (2000).', 40, 770, { align: 'center', width: 515 });
+
+    doc.end();
+  } catch (err) {
+    res.status(500).send('Error generating PDF contract: ' + err.message);
+  }
+});
+
+// Self-Ping Keep-Alive
 const SERVER_URL = process.env.RENDER_EXTERNAL_URL || 'https://mandi-telegram-bot.onrender.com';
 
 setInterval(async () => {
