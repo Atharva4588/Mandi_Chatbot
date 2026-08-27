@@ -57,7 +57,8 @@ const groq = new Groq({ apiKey: GROQ_API_KEY || 'dummy_key' });
 
 const app = express();
 app.use(express.json());
-// Serve the B2B Buyer Web Portal from the public folder
+
+// Serve static assets for the B2B Web Portal from public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
@@ -668,6 +669,35 @@ app.get('/api/crop-cycles', async (req, res) => {
   try {
     const cycles = await CropCycle.find().sort({ createdAt: -1 });
     res.json({ success: true, count: cycles.length, cycles });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Live Agmarknet Mandi Benchmark Rates API
+app.get('/api/mandi-rates', async (req, res) => {
+  try {
+    const rawRates = await Mandi.find({ modalPrice: { $gt: 0 } })
+      .sort({ lastUpdated: -1 })
+      .limit(60);
+
+    const uniqueMap = new Map();
+    for (const item of rawRates) {
+      const key = `${item.commodity}-${item.mandiName}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, item);
+      }
+    }
+
+    const rates = Array.from(uniqueMap.values()).slice(0, 12).map(m => ({
+      commodity: m.commodity,
+      mandi: m.mandiName,
+      district: m.district,
+      modalPrice: m.modalPrice,
+      lastUpdated: m.lastUpdated
+    }));
+
+    res.json({ success: true, count: rates.length, rates });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
