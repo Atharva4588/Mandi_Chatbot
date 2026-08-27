@@ -58,7 +58,7 @@ const groq = new Groq({ apiKey: GROQ_API_KEY || 'dummy_key' });
 const app = express();
 app.use(express.json());
 
-// Serve static assets for the B2B Web Portal from public folder
+// Serve static assets for the B2B Web Portal from the public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
@@ -155,7 +155,10 @@ const commodityAliases = {
   'bajra': 'Bajra', 'bajri': 'Bajra',
   'jowar': 'Jowar', 'jwari': 'Jowar',
   'chana': 'Bengal Gram', 'harbara': 'Bengal Gram',
-  'tur': 'Arhar (Tur)', 'arhar': 'Arhar (Tur)', 'toor': 'Arhar (Tur)'
+  'tur': 'Arhar (Tur)', 'arhar': 'Arhar (Tur)', 'toor': 'Arhar (Tur)',
+  'methi': 'Methi (Fenugreek)', 'fenugreek': 'Methi (Fenugreek)',
+  'coriander': 'Coriander (Kothimbir)', 'kothimbir': 'Coriander (Kothimbir)',
+  'spinach': 'Spinach (Palak)', 'palak': 'Spinach (Palak)'
 };
 
 function normalizeCommodity(inputStr) {
@@ -259,7 +262,7 @@ async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, di
   }
 }
 
-// Daily Agmarknet Sync Function
+// Daily Agmarknet Sync Function with Unit Normalization
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
@@ -276,10 +279,21 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
     for (const item of records) {
       const marketName = item.market || 'Local Mandi';
       const districtName = item.district || 'Unknown';
-      const commodity = normalizeCommodity((item.commodity || '').split('(')[0].trim());
-      const newPrice = parseFloat(item.modal_price) || 0;
+      const rawComm = (item.commodity || '').split('(')[0].trim();
+      const commodity = normalizeCommodity(rawComm);
+      let newPrice = parseFloat(item.modal_price) || 0;
 
       if (newPrice > 0) {
+        // UNIT NORMALIZATION FIX:
+        // Detect leafy greens sold per bunch / 100-bunch units in APMC and normalize to ₹/Quintal
+        const leafyList = ['methi', 'spinach', 'coriander', 'shepu', 'palak', 'kothimbir'];
+        const isLeafy = leafyList.some(c => rawComm.toLowerCase().includes(c));
+
+        if (isLeafy && newPrice < 100) {
+          // Standard conversion factor: ~250 bunches = 1 quintal (100 kg)
+          newPrice = Math.round(newPrice * 250);
+        }
+
         const coords = getQuickCoordinates(marketName, districtName);
         await Mandi.create({
           state: item.state || 'Maharashtra',
@@ -655,7 +669,7 @@ cron.schedule('0 8 * * *', async () => {
 // 4. EXPRESS REST ROUTES & B2B API ENDPOINTS
 // ==========================================
 
-// Fallback status check route
+// Health check route
 app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine' }));
 
 // Agmarknet Manual Trigger
@@ -716,7 +730,7 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
     const userMap = new Map();
     users.forEach((u) => userMap.set(u.chatId, u));
 
-    // 3. Fetch latest APMC benchmark rates for price calculation
+    // 3. Fetch latest APMC benchmark rates for wholesale price calculation
     const allMandis = await Mandi.find({}, 'commodity modalPrice mandiName');
     const priceMap = new Map();
     allMandis.forEach((m) => {
@@ -735,7 +749,7 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
       // Anonymize farmer identity: e.g. LOT-7489-A2F8
       const lotCode = `LOT-${crop.chatId.slice(0, 4)}-${crop._id.toString().slice(-4).toUpperCase()}`;
 
-      // Approximate regional cluster without revealing coordinates
+      // Approximate regional cluster without revealing GPS coordinates
       let clusterName = 'Western Maharashtra Cluster';
       if (user) {
         if (user.latitude > 19.5) clusterName = 'Nashik-Ahilyanagar Agri Zone';
@@ -745,7 +759,7 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
 
       const daysLeft = Math.max(0, Math.ceil((new Date(crop.estimatedHarvestDate) - new Date()) / (1000 * 60 * 60 * 24)));
       
-      // B2B Wholesale Pricing: Farmer Floor + Platform Quality Assay + Logistics Margin
+      // B2B Wholesale Pricing: Benchmark + Managed Platform Assay/Quality Margin
       const b2bWholesalePrice = Math.round(benchmarkPrice * 1.05);
 
       return {
@@ -775,7 +789,7 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
   }
 });
 
-// B2B Contract Procurement RFQ Order Desk Endpoint (with quantity & address updates)
+// B2B Contract Procurement RFQ Order Desk Endpoint
 app.post('/api/b2b/procure-lot', async (req, res) => {
   try {
     const { lotId, buyerName, buyerCompany, phone, deliveryLocation, deliveryAddress, orderedQuintals } = req.body;
@@ -787,7 +801,7 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
 
     const qty = parseFloat(orderedQuintals) || crop.expectedQuintals;
 
-    // Partial order deduction or full status update
+    // Partial order deduction or full status transition
     if (qty >= crop.expectedQuintals) {
       crop.status = 'PROCURED';
     } else {
