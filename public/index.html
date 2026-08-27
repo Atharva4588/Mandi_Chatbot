@@ -266,7 +266,7 @@
   <!-- Contract Locking Slide-Out Modal Drawer -->
   <div id="orderDrawer" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 hidden flex justify-end">
     <div class="bg-white w-full max-w-md h-full border-l border-slate-200 p-6 flex flex-col justify-between overflow-y-auto shadow-2xl">
-      <div class="space-y-6">
+      <div class="space-y-5">
         <div class="flex items-center justify-between border-b border-slate-100 pb-4">
           <div>
             <h3 class="text-lg font-bold text-slate-900">Direct Procurement RFQ</h3>
@@ -287,8 +287,8 @@
         </div>
 
         <!-- Stepper Component -->
-        <div class="space-y-2 pt-2">
-          <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Managed Fulfillment Flow</span>
+        <div class="space-y-1.5 pt-1">
+          <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Managed Fulfillment Flow</span>
           <div class="flex items-center justify-between text-[11px] text-slate-500">
             <span class="text-emerald-600 font-bold">1. Contract Locked</span>
             <span>→</span>
@@ -299,29 +299,42 @@
         </div>
 
         <!-- Buyer Input Form -->
-        <form id="procurementForm" class="space-y-4 text-xs">
+        <form id="procurementForm" class="space-y-3.5 text-xs">
+          <div>
+            <label class="block text-slate-700 mb-1 font-semibold">Procurement Quantity (Quintals)</label>
+            <input type="number" id="orderQuantity" min="1" oninput="updateCalculatedTotal()" required class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 font-bold focus:outline-none focus:border-emerald-500">
+            <span id="qtyHelp" class="text-[10px] text-slate-400 mt-0.5 block"></span>
+          </div>
+
           <div>
             <label class="block text-slate-700 mb-1 font-semibold">Institutional / Company Entity</label>
             <input type="text" id="buyerCompany" required placeholder="e.g. Reliance Retail, ITC, BigBasket" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-emerald-500">
           </div>
+
           <div>
             <label class="block text-slate-700 mb-1 font-semibold">Procurement Officer Name</label>
             <input type="text" id="buyerName" required placeholder="Full Name" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-emerald-500">
           </div>
+
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block text-slate-700 mb-1 font-semibold">Phone / WhatsApp</label>
               <input type="tel" id="buyerPhone" required placeholder="+91..." class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-emerald-500">
             </div>
             <div>
-              <label class="block text-slate-700 mb-1 font-semibold">Delivery Hub</label>
+              <label class="block text-slate-700 mb-1 font-semibold">Delivery City / Hub</label>
               <input type="text" id="buyerCity" required placeholder="e.g. Navi Mumbai Hub" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-emerald-500">
             </div>
+          </div>
+
+          <div>
+            <label class="block text-slate-700 mb-1 font-semibold">Detailed Warehouse / Delivery Address</label>
+            <textarea id="buyerAddress" rows="2" required placeholder="Plot / Shed No., Industrial Area, Landmark, Pincode" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-emerald-500 resize-none"></textarea>
           </div>
         </form>
       </div>
 
-      <div class="pt-6 border-t border-slate-100 space-y-2">
+      <div class="pt-4 border-t border-slate-100 space-y-2">
         <button onclick="submitProcurement()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition text-xs shadow-sm flex items-center justify-center gap-1.5">
           <i data-lucide="check-circle" class="w-4 h-4"></i> Lock Direct Procurement Contract
         </button>
@@ -449,9 +462,22 @@
       document.getElementById('drawerVolume').innerText = `${selectedLot.volumeQuintals} Quintals`;
       document.getElementById('drawerCluster').innerText = selectedLot.clusterOrigin;
       document.getElementById('drawerPrice').innerText = `₹${selectedLot.wholesalePricePerQtl}/quintal`;
-      document.getElementById('drawerTotal').innerText = `₹${selectedLot.totalLotValue.toLocaleString('en-IN')}`;
 
+      // Set default order quantity to full available lot volume
+      const qtyInput = document.getElementById('orderQuantity');
+      qtyInput.value = selectedLot.volumeQuintals;
+      qtyInput.max = selectedLot.volumeQuintals;
+      document.getElementById('qtyHelp').innerText = `Max available: ${selectedLot.volumeQuintals} Quintals`;
+
+      updateCalculatedTotal();
       document.getElementById('orderDrawer').classList.remove('hidden');
+    }
+
+    function updateCalculatedTotal() {
+      if (!selectedLot) return;
+      const qty = parseFloat(document.getElementById('orderQuantity').value) || 0;
+      const total = qty * selectedLot.wholesalePricePerQtl;
+      document.getElementById('drawerTotal').innerText = `₹${total.toLocaleString('en-IN')}`;
     }
 
     function closeDrawer() {
@@ -463,9 +489,16 @@
       const name = document.getElementById('buyerName').value;
       const phone = document.getElementById('buyerPhone').value;
       const city = document.getElementById('buyerCity').value;
+      const address = document.getElementById('buyerAddress').value;
+      const quantity = parseFloat(document.getElementById('orderQuantity').value);
 
-      if (!company || !name || !phone) {
-        alert('Please complete all contact details.');
+      if (!company || !name || !phone || !city || !address || !quantity) {
+        alert('Please complete all contact details, quantity, and address.');
+        return;
+      }
+
+      if (quantity > selectedLot.volumeQuintals || quantity <= 0) {
+        alert(`Please enter a valid quantity between 1 and ${selectedLot.volumeQuintals} Quintals.`);
         return;
       }
 
@@ -477,13 +510,15 @@
           buyerName: name,
           buyerCompany: company,
           phone,
-          deliveryLocation: city
+          deliveryLocation: city,
+          deliveryAddress: address,
+          orderedQuintals: quantity
         })
       });
 
       const data = await res.json();
       if (data.success) {
-        alert(`🎉 Contract Locked!\nOrder Ref: ${data.orderReference}\nThe farmer has been notified instantly via Telegram.`);
+        alert(`🎉 Contract Locked!\nOrder Ref: ${data.orderReference}\nBooked: ${quantity} Quintals\nThe farmer has been notified instantly via Telegram.`);
         closeDrawer();
         fetchSupplyFeed();
       } else {

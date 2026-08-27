@@ -775,23 +775,31 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
   }
 });
 
-// B2B Contract Procurement RFQ Order Desk Endpoint
+// B2B Contract Procurement RFQ Order Desk Endpoint (with quantity & address updates)
 app.post('/api/b2b/procure-lot', async (req, res) => {
   try {
-    const { lotId, buyerName, buyerCompany, phone, email, deliveryLocation } = req.body;
+    const { lotId, buyerName, buyerCompany, phone, deliveryLocation, deliveryAddress, orderedQuintals } = req.body;
     
     const crop = await CropCycle.findById(lotId);
     if (!crop) {
       return res.status(404).json({ success: false, message: 'Agri Lot not found or already procured' });
     }
 
-    // Update status to prevent double-booking
-    crop.status = 'PROCURED';
+    const qty = parseFloat(orderedQuintals) || crop.expectedQuintals;
+
+    // Partial order deduction or full status update
+    if (qty >= crop.expectedQuintals) {
+      crop.status = 'PROCURED';
+    } else {
+      crop.expectedQuintals -= qty;
+    }
     await crop.save();
 
-    // Alert Farmer directly on Telegram
+    // Direct Telegram Alert to the Farmer
     const farmerAlert = `🎉 *GOOD NEWS: Lot Procured!*\n\n` +
-                        `📦 Your harvest of *${crop.expectedQuintals} Quintals (${crop.commodity})* has been booked by an institutional buyer (${buyerCompany}).\n` +
+                        `📦 Booked Volume: *${qty} Quintals (${crop.commodity})*\n` +
+                        `🏢 Institutional Buyer: *${buyerCompany}*\n` +
+                        `📍 Delivery Hub: *${deliveryLocation}*\n` +
                         `🚚 Platform vehicle dispatch scheduled for harvest window.\n` +
                         `🛡️ *Guaranteed Direct UPI Settlement on Farm-Gate Weighment.*`;
     
