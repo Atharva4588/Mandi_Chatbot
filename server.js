@@ -262,20 +262,22 @@ async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, di
   }
 }
 
-// Daily Agmarknet Sync Function with Unit Normalization
+// High-Speed Bulk Agmarknet Sync with Unit Normalization
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
   let records = [];
   try {
-    const response = await axios.get(apiUrl, { timeout: 35000 });
+    const response = await axios.get(apiUrl, { timeout: 20000 });
     records = response.data.records || [];
   } catch (err) {
-    console.warn('⚠️ Agmarknet API warning:', err.message);
+    console.warn('⚠️ Agmarknet API fetch warning:', err.message);
   }
 
   if (records && records.length > 0) {
-    await Mandi.deleteMany({});
+    const leafyList = ['methi', 'spinach', 'coriander', 'shepu', 'palak', 'kothimbir'];
+    const docsToInsert = [];
+
     for (const item of records) {
       const marketName = item.market || 'Local Mandi';
       const districtName = item.district || 'Unknown';
@@ -284,18 +286,14 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
       let newPrice = parseFloat(item.modal_price) || 0;
 
       if (newPrice > 0) {
-        // UNIT NORMALIZATION FIX:
-        // Detect leafy greens sold per bunch / 100-bunch units in APMC and normalize to ₹/Quintal
-        const leafyList = ['methi', 'spinach', 'coriander', 'shepu', 'palak', 'kothimbir'];
+        // Unit Normalization: Scale per-bunch pricing up to standard ₹/quintal
         const isLeafy = leafyList.some(c => rawComm.toLowerCase().includes(c));
-
         if (isLeafy && newPrice < 100) {
-          // Standard conversion factor: ~250 bunches = 1 quintal (100 kg)
           newPrice = Math.round(newPrice * 250);
         }
 
         const coords = getQuickCoordinates(marketName, districtName);
-        await Mandi.create({
+        docsToInsert.push({
           state: item.state || 'Maharashtra',
           district: districtName,
           mandiName: marketName,
@@ -308,10 +306,15 @@ async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
         });
       }
     }
+
+    if (docsToInsert.length > 0) {
+      await Mandi.deleteMany({});
+      await Mandi.insertMany(docsToInsert, { ordered: false });
+    }
   }
 
   const totalCount = await Mandi.countDocuments();
-  return { message: `Synced ${totalCount} live market records across Maharashtra!` };
+  return { message: `Fast synced ${totalCount} live market records across Maharashtra!` };
 }
 
 // Render Arbitrage Results (Strict Hard Cutoff <= 100 km)
@@ -672,10 +675,14 @@ cron.schedule('0 8 * * *', async () => {
 // Health check route
 app.get('/api/health', (req, res) => res.json({ status: 'active', service: 'BhavNetra Mandi & B2B Engine' }));
 
-// Agmarknet Manual Trigger
+// Fast Agmarknet Manual Trigger
 app.get('/api/sync-agmarknet', async (req, res) => {
-  const result = await fetchAndSyncAgmarknet(req.query.state || 'Maharashtra');
-  res.json({ success: true, ...result });
+  try {
+    const result = await fetchAndSyncAgmarknet(req.query.state || 'Maharashtra');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Admin Route to inspect all registered crop cycles
@@ -720,17 +727,14 @@ app.get('/api/mandi-rates', async (req, res) => {
 // Anonymized B2B Buyer Supply Feed Endpoint
 app.get('/api/b2b/supply-feed', async (req, res) => {
   try {
-    // 1. Fetch active crop cycles (Growing / Harvest Ready)
     const activeCrops = await CropCycle.find({
       status: { $in: ['GROWING', 'HARVEST_READY'] }
     }).sort({ estimatedHarvestDate: 1 });
 
-    // 2. Fetch user locations to infer aggregate regional cluster
     const users = await User.find({}, 'chatId latitude longitude');
     const userMap = new Map();
     users.forEach((u) => userMap.set(u.chatId, u));
 
-    // 3. Fetch latest APMC benchmark rates for wholesale price calculation
     const allMandis = await Mandi.find({}, 'commodity modalPrice mandiName');
     const priceMap = new Map();
     allMandis.forEach((m) => {
@@ -746,10 +750,8 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
       const benchMandi = priceMap.get(commKey);
       const benchmarkPrice = benchMandi ? benchMandi.modalPrice : 2200;
 
-      // Anonymize farmer identity: e.g. LOT-7489-A2F8
       const lotCode = `LOT-${crop.chatId.slice(0, 4)}-${crop._id.toString().slice(-4).toUpperCase()}`;
 
-      // Approximate regional cluster without revealing GPS coordinates
       let clusterName = 'Western Maharashtra Cluster';
       if (user) {
         if (user.latitude > 19.5) clusterName = 'Nashik-Ahilyanagar Agri Zone';
@@ -758,8 +760,6 @@ app.get('/api/b2b/supply-feed', async (req, res) => {
       }
 
       const daysLeft = Math.max(0, Math.ceil((new Date(crop.estimatedHarvestDate) - new Date()) / (1000 * 60 * 60 * 24)));
-      
-      // B2B Wholesale Pricing: Benchmark + Managed Platform Assay/Quality Margin
       const b2bWholesalePrice = Math.round(benchmarkPrice * 1.05);
 
       return {
@@ -801,7 +801,6 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
 
     const qty = parseFloat(orderedQuintals) || crop.expectedQuintals;
 
-    // Partial order deduction or full status transition
     if (qty >= crop.expectedQuintals) {
       crop.status = 'PROCURED';
     } else {
