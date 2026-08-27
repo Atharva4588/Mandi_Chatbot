@@ -47,11 +47,11 @@ const { point } = require('@turf/helpers');
 const TelegramBot = TelegramBotPackage.default || TelegramBotPackage;
 const Mandi = require('./models/Mandi');
 
-// Credentials & Configuration
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8878208094:AAEBZ06revJ10sn92ETNky9jP5GWxNFK5gg';
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://atharvagdumbre_db_user:2ecBzFIed7vLhMtt@cluster0.icowgqz.mongodb.net/mandi_db?retryWrites=true&w=majority';
+// Credentials & Configuration (Strict Environment Variables)
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const MONGO_URI = process.env.MONGO_URI;
 const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-const AGMARKNET_API_KEY = process.env.DATA_GOV_API_KEY || '579b464db66ec23bdd0000018332acedc15c4ee159ffd2da233cac45';
+const AGMARKNET_API_KEY = process.env.DATA_GOV_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 
 const groq = new Groq({ apiKey: GROQ_API_KEY || 'dummy_key' });
@@ -168,17 +168,21 @@ const userLocations = {};
 const userQueries = {};
 
 // Database Connection
-mongoose.connect(MONGO_URI, {
-  serverSelectionTimeoutMS: 20000,
-  socketTimeoutMS: 45000,
-})
-  .then(() => {
-    console.log('✅ Connected to MongoDB Atlas!');
-    fetchAndSyncAgmarknet('Maharashtra')
-      .then(res => console.log(`🚀 [Boot Sync]: ${res.message}`))
-      .catch(err => console.warn('⚠️ Boot sync warning:', err.message));
+if (MONGO_URI) {
+  mongoose.connect(MONGO_URI, {
+    serverSelectionTimeoutMS: 20000,
+    socketTimeoutMS: 45000,
   })
-  .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
+    .then(() => {
+      console.log('✅ Connected to MongoDB Atlas!');
+      fetchAndSyncAgmarknet('Maharashtra')
+        .then(res => console.log(`🚀 [Boot Sync]: ${res.message}`))
+        .catch(err => console.warn('⚠️ Boot sync warning:', err.message));
+    })
+    .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
+} else {
+  console.warn('⚠️ MONGO_URI is not set. Please provide it in your environment.');
+}
 
 function calculateKmDistance(userLat, userLng, mandiLat, mandiLng) {
   if (!userLat || !userLng || !mandiLat || !mandiLng) return 9999;
@@ -252,6 +256,10 @@ async function fetchDynamicQuote(commodity, market, currentPrice, floorPrice, di
 
 // Bulk Sync Pipeline with Quality Tiers
 async function fetchAndSyncAgmarknet(state = 'Maharashtra') {
+  if (!AGMARKNET_API_KEY) {
+    return { message: 'AGMARKNET_API_KEY missing. Skipped live fetch.' };
+  }
+
   const apiUrl = `https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key=${AGMARKNET_API_KEY}&format=json&filters[state]=${encodeURIComponent(state)}&limit=3000`;
 
   let records = [];
@@ -442,205 +450,209 @@ async function renderArbitrageResults(chatId, sortBy = 'profit') {
 
 // Telegram Bot Events
 let bot;
-try {
-  bot = new TelegramBot(TELEGRAM_TOKEN, {
-    polling: { interval: 1500, autoStart: true, params: { timeout: 25 } }
-  });
+if (TELEGRAM_TOKEN) {
+  try {
+    bot = new TelegramBot(TELEGRAM_TOKEN, {
+      polling: { interval: 1500, autoStart: true, params: { timeout: 25 } }
+    });
 
-  console.log('🤖 Telegram Bot initialized and polling 24/7...');
+    console.log('🤖 Telegram Bot initialized and polling 24/7...');
 
-  bot.on('location', async (msg) => {
-    const chatIdKey = String(msg.chat.id);
-    const { latitude, longitude } = msg.location;
-    userLocations[chatIdKey] = { latitude, longitude };
+    bot.on('location', async (msg) => {
+      const chatIdKey = String(msg.chat.id);
+      const { latitude, longitude } = msg.location;
+      userLocations[chatIdKey] = { latitude, longitude };
 
-    await User.findOneAndUpdate(
-      { chatId: chatIdKey },
-      { 
-        chatId: chatIdKey, 
-        latitude, 
-        longitude, 
-        location: { type: 'Point', coordinates: [longitude, latitude] },
-        updatedAt: new Date() 
-      },
-      { upsert: true, returnDocument: 'after' }
-    );
-
-    return bot.sendMessage(
-      msg.chat.id,
-      `📍 *Location Saved!* (${latitude.toFixed(4)}, ${longitude.toFixed(4)})\n\nSend your crop query (e.g. \`Onion 20\`) or register a harvest with \`/sow\`!`,
-      { parse_mode: 'Markdown' }
-    );
-  });
-
-  // Quality Assay Photo Receiver
-  bot.on('photo', async (msg) => {
-    const chatIdKey = String(msg.chat.id);
-    const photoArray = msg.photo;
-    const highestResPhoto = photoArray[photoArray.length - 1];
-
-    try {
-      const fileLink = await bot.getFileLink(highestResPhoto.file_id);
-      const latestCrop = await CropCycle.findOne({ chatId: chatIdKey, status: 'GROWING' }).sort({ createdAt: -1 });
-
-      if (latestCrop) {
-        latestCrop.imageUrl = fileLink;
-        await latestCrop.save();
-        bot.sendMessage(msg.chat.id, `📸 *Assay Photo Attached!*\n\nImage successfully linked to your active *${latestCrop.commodity}* lot for B2B buyers to verify quality.`, { parse_mode: 'Markdown' });
-      } else {
-        bot.sendMessage(msg.chat.id, "⚠️ No active growing crop found. Use `/sow` first to register your crop.", { parse_mode: 'Markdown' });
-      }
-    } catch (err) {
-      bot.sendMessage(msg.chat.id, "❌ Failed to attach photo.");
-    }
-  });
-
-  bot.on('voice', async (msg) => {
-    const chatId = msg.chat.id;
-    const chatIdKey = String(chatId);
-    bot.sendMessage(chatId, "🎙️ *Transcribing voice message with Whisper...*", { parse_mode: 'Markdown' });
-
-    const localAudioPath = path.join('/tmp', `voice_${chatId}_${Date.now()}.ogg`);
-    try {
-      const fileId = msg.voice.file_id;
-      const fileLink = await bot.getFileLink(fileId);
-      const response = await axios({ method: 'get', url: fileLink, responseType: 'stream' });
-      const writer = fs.createWriteStream(localAudioPath);
-      response.data.pipe(writer);
-
-      writer.on('finish', async () => {
-        try {
-          const transcription = await groq.audio.transcriptions.create({
-            file: fs.createReadStream(localAudioPath),
-            model: 'whisper-large-v3-turbo',
-            prompt: 'Crop name and quantity in quintals like Onion 10, Sugarcane 20, Potato 30, Chilly 5, Bhindi 15, Bajra 20'
-          });
-          if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
-
-          const text = (transcription.text || '').trim();
-          bot.sendMessage(chatId, `🗣️ *You said:* "${text}"`, { parse_mode: 'Markdown' });
-
-          const parts = text.replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/);
-          if (parts.length >= 2) {
-            const rawCommodity = parts[0];
-            const quantityQuintals = parseFloat(parts[1]);
-            if (!isNaN(quantityQuintals)) {
-              userQueries[chatIdKey] = { rawCommodity, quantityQuintals };
-              return renderArbitrageResults(chatId, 'profit');
-            }
-          }
-          bot.sendMessage(chatId, "⚠️ Couldn't extract crop and quantity. Please say e.g., *'Onion 20'*", { parse_mode: 'Markdown' });
-        } catch (err) {
-          if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
-          bot.sendMessage(chatId, "❌ Voice transcription error.");
-        }
-      });
-    } catch (err) {
-      if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
-      bot.sendMessage(chatId, "❌ Failed to retrieve voice file.");
-    }
-  });
-
-  bot.on('callback_query', async (callbackQuery) => {
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-    bot.answerCallbackQuery(callbackQuery.id);
-
-    if (data === 'sort_profit') {
-      await renderArbitrageResults(chatId, 'profit');
-    } else if (data === 'sort_distance') {
-      await renderArbitrageResults(chatId, 'distance');
-    } else if (data.startsWith('contract_')) {
-      const [, mandi, priceStr, distStr] = data.split('_');
-      const query = userQueries[String(chatId)];
-      if (!query) return;
-
-      const spotPrice = parseFloat(priceStr);
-      const floorPrice = Math.round(spotPrice * 0.85);
-      const dist = parseFloat(distStr);
-
-      const quote = await fetchDynamicQuote(query.rawCommodity, mandi, spotPrice, floorPrice, dist, query.quantityQuintals);
-      if (quote) {
-        let msg = `📋 *भावनेत्र Guaranteed Farm-Gate Offer*\n\n`;
-        msg += `🌾 Crop: *${query.rawCommodity}* (${query.quantityQuintals} Quintals)\n`;
-        msg += `🛡️ Guaranteed Safety Floor: *₹${floorPrice}/quintal*\n`;
-        msg += `✨ Grade A Quality Bonus: *+₹${quote.breakdown.quality_premium}/quintal*\n`;
-        msg += `📈 Upside Share Added: *+₹${quote.breakdown.upside_share}/quintal*\n`;
-        msg += `🚚 Transport Cost: *₹0 (Handled by Platform)*\n\n`;
-        msg += `💵 *NET FARM-GATE PAYOUT: ₹${quote.farmer_payout_per_quintal}/quintal*\n`;
-        msg += `💰 *TOTAL SETTLEMENT: ₹${quote.total_farmer_settlement.toLocaleString('en-IN')}*\n\n`;
-        msg += `✅ *Instant Direct Bank/UPI Transfer upon Farm-Gate Weighment!*`;
-        bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
-      }
-    }
-  });
-
-  bot.on('message', async (msg) => {
-    if (msg.location || msg.voice || msg.photo) return;
-    const chatId = msg.chat.id;
-    const text = (msg.text || '').trim();
-
-    if (!text) return;
-
-    if (text === '/start') {
-      return bot.sendMessage(
-        chatId, 
-        "🌾 *Welcome to भावनेत्र (BhavNetra)!*\n\n1️⃣ Tap *'📍 Share Current Location'*\n2️⃣ Send crop & quantity (e.g., `Onion 20`, `Potato 50`)\n3️⃣ Use `/sow` to register your upcoming harvest!\n4️⃣ Send a photo of your crop to attach an assay certificate.",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: JSON.stringify({
-            keyboard: [[{ text: '📍 Share Current Location', request_location: true }]],
-            resize_keyboard: true
-          })
-        }
+      await User.findOneAndUpdate(
+        { chatId: chatIdKey },
+        { 
+          chatId: chatIdKey, 
+          latitude, 
+          longitude, 
+          location: { type: 'Point', coordinates: [longitude, latitude] },
+          updatedAt: new Date() 
+        },
+        { upsert: true, returnDocument: 'after' }
       );
-    }
 
-    if (text.startsWith('/sow')) {
-      const parts = text.split(' ');
-      if (parts.length < 4) {
+      return bot.sendMessage(
+        msg.chat.id,
+        `📍 *Location Saved!* (${latitude.toFixed(4)}, ${longitude.toFixed(4)})\n\nSend your crop query (e.g. \`Onion 20\`) or register a harvest with \`/sow\`!`,
+        { parse_mode: 'Markdown' }
+      );
+    });
+
+    // Quality Assay Photo Receiver
+    bot.on('photo', async (msg) => {
+      const chatIdKey = String(msg.chat.id);
+      const photoArray = msg.photo;
+      const highestResPhoto = photoArray[photoArray.length - 1];
+
+      try {
+        const fileLink = await bot.getFileLink(highestResPhoto.file_id);
+        const latestCrop = await CropCycle.findOne({ chatId: chatIdKey, status: 'GROWING' }).sort({ createdAt: -1 });
+
+        if (latestCrop) {
+          latestCrop.imageUrl = fileLink;
+          await latestCrop.save();
+          bot.sendMessage(msg.chat.id, `📸 *Assay Photo Attached!*\n\nImage successfully linked to your active *${latestCrop.commodity}* lot for B2B buyers to verify quality.`, { parse_mode: 'Markdown' });
+        } else {
+          bot.sendMessage(msg.chat.id, "⚠️ No active growing crop found. Use `/sow` first to register your crop.", { parse_mode: 'Markdown' });
+        }
+      } catch (err) {
+        bot.sendMessage(msg.chat.id, "❌ Failed to attach photo.");
+      }
+    });
+
+    bot.on('voice', async (msg) => {
+      const chatId = msg.chat.id;
+      const chatIdKey = String(chatId);
+      bot.sendMessage(chatId, "🎙️ *Transcribing voice message with Whisper...*", { parse_mode: 'Markdown' });
+
+      const localAudioPath = path.join('/tmp', `voice_${chatId}_${Date.now()}.ogg`);
+      try {
+        const fileId = msg.voice.file_id;
+        const fileLink = await bot.getFileLink(fileId);
+        const response = await axios({ method: 'get', url: fileLink, responseType: 'stream' });
+        const writer = fs.createWriteStream(localAudioPath);
+        response.data.pipe(writer);
+
+        writer.on('finish', async () => {
+          try {
+            const transcription = await groq.audio.transcriptions.create({
+              file: fs.createReadStream(localAudioPath),
+              model: 'whisper-large-v3-turbo',
+              prompt: 'Crop name and quantity in quintals like Onion 10, Sugarcane 20, Potato 30, Chilly 5, Bhindi 15, Bajra 20'
+            });
+            if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
+
+            const text = (transcription.text || '').trim();
+            bot.sendMessage(chatId, `🗣️ *You said:* "${text}"`, { parse_mode: 'Markdown' });
+
+            const parts = text.replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/);
+            if (parts.length >= 2) {
+              const rawCommodity = parts[0];
+              const quantityQuintals = parseFloat(parts[1]);
+              if (!isNaN(quantityQuintals)) {
+                userQueries[chatIdKey] = { rawCommodity, quantityQuintals };
+                return renderArbitrageResults(chatId, 'profit');
+              }
+            }
+            bot.sendMessage(chatId, "⚠️ Couldn't extract crop and quantity. Please say e.g., *'Onion 20'*", { parse_mode: 'Markdown' });
+          } catch (err) {
+            if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
+            bot.sendMessage(chatId, "❌ Voice transcription error.");
+          }
+        });
+      } catch (err) {
+        if (fs.existsSync(localAudioPath)) fs.unlinkSync(localAudioPath);
+        bot.sendMessage(chatId, "❌ Failed to retrieve voice file.");
+      }
+    });
+
+    bot.on('callback_query', async (callbackQuery) => {
+      const chatId = callbackQuery.message.chat.id;
+      const data = callbackQuery.data;
+      bot.answerCallbackQuery(callbackQuery.id);
+
+      if (data === 'sort_profit') {
+        await renderArbitrageResults(chatId, 'profit');
+      } else if (data === 'sort_distance') {
+        await renderArbitrageResults(chatId, 'distance');
+      } else if (data.startsWith('contract_')) {
+        const [, mandi, priceStr, distStr] = data.split('_');
+        const query = userQueries[String(chatId)];
+        if (!query) return;
+
+        const spotPrice = parseFloat(priceStr);
+        const floorPrice = Math.round(spotPrice * 0.85);
+        const dist = parseFloat(distStr);
+
+        const quote = await fetchDynamicQuote(query.rawCommodity, mandi, spotPrice, floorPrice, dist, query.quantityQuintals);
+        if (quote) {
+          let msg = `📋 *भावनेत्र Guaranteed Farm-Gate Offer*\n\n`;
+          msg += `🌾 Crop: *${query.rawCommodity}* (${query.quantityQuintals} Quintals)\n`;
+          msg += `🛡️ Guaranteed Safety Floor: *₹${floorPrice}/quintal*\n`;
+          msg += `✨ Grade A Quality Bonus: *+₹${quote.breakdown.quality_premium}/quintal*\n`;
+          msg += `📈 Upside Share Added: *+₹${quote.breakdown.upside_share}/quintal*\n`;
+          msg += `🚚 Transport Cost: *₹0 (Handled by Platform)*\n\n`;
+          msg += `💵 *NET FARM-GATE PAYOUT: ₹${quote.farmer_payout_per_quintal}/quintal*\n`;
+          msg += `💰 *TOTAL SETTLEMENT: ₹${quote.total_farmer_settlement.toLocaleString('en-IN')}*\n\n`;
+          msg += `✅ *Instant Direct Bank/UPI Transfer upon Farm-Gate Weighment!*`;
+          bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+        }
+      }
+    });
+
+    bot.on('message', async (msg) => {
+      if (msg.location || msg.voice || msg.photo) return;
+      const chatId = msg.chat.id;
+      const text = (msg.text || '').trim();
+
+      if (!text) return;
+
+      if (text === '/start') {
+        return bot.sendMessage(
+          chatId, 
+          "🌾 *Welcome to भावनेत्र (BhavNetra)!*\n\n1️⃣ Tap *'📍 Share Current Location'*\n2️⃣ Send crop & quantity (e.g., `Onion 20`, `Potato 50`)\n3️⃣ Use `/sow` to register your upcoming harvest!\n4️⃣ Send a photo of your crop to attach an assay certificate.",
+          {
+            parse_mode: 'Markdown',
+            reply_markup: JSON.stringify({
+              keyboard: [[{ text: '📍 Share Current Location', request_location: true }]],
+              resize_keyboard: true
+            })
+          }
+        );
+      }
+
+      if (text.startsWith('/sow')) {
+        const parts = text.split(' ');
+        if (parts.length < 4) {
+          return bot.sendMessage(
+            chatId,
+            "🌱 *Register Sowing & Harvest Date:*\nFormat: `/sow [Crop] [Acres] [ExpectedQuintals]`\n\nExample: `/sow Onion 3 150`",
+            { parse_mode: 'Markdown' }
+          );
+        }
+        const commodity = normalizeCommodity(parts[1]);
+        const acres = parseFloat(parts[2]);
+        const expectedQuintals = parseFloat(parts[3]);
+        const harvestDate = new Date();
+        harvestDate.setDate(harvestDate.getDate() + 90);
+
+        await CropCycle.create({
+          chatId: String(chatId),
+          commodity,
+          acres,
+          expectedQuintals,
+          estimatedHarvestDate: harvestDate
+        });
+
         return bot.sendMessage(
           chatId,
-          "🌱 *Register Sowing & Harvest Date:*\nFormat: `/sow [Crop] [Acres] [ExpectedQuintals]`\n\nExample: `/sow Onion 3 150`",
+          `✅ *Harvest Registered!*\n\n🌾 Crop: *${commodity}*\n📐 Area: *${acres} Acres*\n📦 Expected Yield: *${expectedQuintals} Quintals*\n🗓️ Expected Harvest: *${harvestDate.toDateString()}*\n\n💡 *Tip:* Send a photo of your field/crop to attach a visual quality assay!`,
           { parse_mode: 'Markdown' }
         );
       }
-      const commodity = normalizeCommodity(parts[1]);
-      const acres = parseFloat(parts[2]);
-      const expectedQuintals = parseFloat(parts[3]);
-      const harvestDate = new Date();
-      harvestDate.setDate(harvestDate.getDate() + 90);
 
-      await CropCycle.create({
-        chatId: String(chatId),
-        commodity,
-        acres,
-        expectedQuintals,
-        estimatedHarvestDate: harvestDate
-      });
-
-      return bot.sendMessage(
-        chatId,
-        `✅ *Harvest Registered!*\n\n🌾 Crop: *${commodity}*\n📐 Area: *${acres} Acres*\n📦 Expected Yield: *${expectedQuintals} Quintals*\n🗓️ Expected Harvest: *${harvestDate.toDateString()}*\n\n💡 *Tip:* Send a photo of your field/crop to attach a visual quality assay!`,
-        { parse_mode: 'Markdown' }
-      );
-    }
-
-    const parts = text.split(' ');
-    if (parts.length >= 2) {
-      const rawCommodity = parts[0];
-      const quantityQuintals = parseFloat(parts[1]);
-      if (!isNaN(quantityQuintals)) {
-        userQueries[String(chatId)] = { rawCommodity, quantityQuintals };
-        return renderArbitrageResults(chatId, 'profit');
+      const parts = text.split(' ');
+      if (parts.length >= 2) {
+        const rawCommodity = parts[0];
+        const quantityQuintals = parseFloat(parts[1]);
+        if (!isNaN(quantityQuintals)) {
+          userQueries[String(chatId)] = { rawCommodity, quantityQuintals };
+          return renderArbitrageResults(chatId, 'profit');
+        }
       }
-    }
 
-    return bot.sendMessage(chatId, "⚠️ Enter format: `[Crop] [Quantity]` (e.g. `Onion 20`) or `/sow` to register harvest.", { parse_mode: 'Markdown' });
-  });
+      return bot.sendMessage(chatId, "⚠️ Enter format: `[Crop] [Quantity]` (e.g. `Onion 20`) or `/sow` to register harvest.", { parse_mode: 'Markdown' });
+    });
 
-} catch (err) {
-  console.error('❌ Failed to start Telegram Bot:', err.message);
+  } catch (err) {
+    console.error('❌ Failed to start Telegram Bot:', err.message);
+  }
+} else {
+  console.warn('⚠️ TELEGRAM_BOT_TOKEN is missing in environment.');
 }
 
 // Scheduled Background Syncs
@@ -670,7 +682,9 @@ cron.schedule('0 8 * * *', async () => {
                        `🛡️ Want to lock in a guaranteed floor payout with zero transport costs?\n\n` +
                        `Send: \`${crop.commodity} ${crop.expectedQuintals}\` to check live market rates!`;
 
-      bot.sendMessage(crop.chatId, alertMsg, { parse_mode: 'Markdown' }).catch(() => {});
+      if (bot) {
+        bot.sendMessage(crop.chatId, alertMsg, { parse_mode: 'Markdown' }).catch(() => {});
+      }
     }
   } catch (err) {
     console.error('❌ Pre-Harvest Cron Error:', err.message);
@@ -817,7 +831,9 @@ app.post('/api/b2b/procure-lot', async (req, res) => {
                         `🚚 Platform vehicle dispatch scheduled for harvest window.\n` +
                         `🛡️ *Guaranteed Direct UPI Settlement on Farm-Gate Weighment.*`;
     
-    bot.sendMessage(crop.chatId, farmerAlert, { parse_mode: 'Markdown' }).catch(() => {});
+    if (bot) {
+      bot.sendMessage(crop.chatId, farmerAlert, { parse_mode: 'Markdown' }).catch(() => {});
+    }
 
     res.json({
       success: true,
