@@ -11,18 +11,18 @@ import lightgbm as lgb
 from catboost import CatBoostRegressor
 
 # ==========================================
-# 1. CONFIGURATION & FEATURE SPECIFICATION
+# 1. CONFIGURATION & COMPREHENSIVE FEATURES
 # ==========================================
 PARQUET_PATH = "bhavnetra_clean_25yr.parquet"
 MODEL_DIR = "ensemble_models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 FEATURES = [
-    # Base Market Indicators
+    # --- 1. Base Market Indicators ---
     'modal_price',
     'arrivals_tonnes',
     
-    # Temporal & Cyclical Signals
+    # --- 2. Temporal & Cyclical Signals ---
     'day_of_week',
     'day_of_year',
     'month',
@@ -33,7 +33,7 @@ FEATURES = [
     'sin_dow',
     'cos_dow',
     
-    # Multi-Scale Price Lags & Moving Averages
+    # --- 3. Multi-Scale Price Lags & Moving Averages ---
     'price_lag_1',
     'price_lag_3',
     'price_lag_7',
@@ -47,12 +47,31 @@ FEATURES = [
     'rolling_std_30d',
     'price_change_7d',
     
-    # Supply & Arrivals Elasticity
+    # --- 4. Supply & Arrivals Elasticity ---
     'arrivals_lag_1',
     'arrivals_lag_7',
     'arrivals_rolling_7d',
     'arrivals_rolling_30d',
-    'arrival_shock_ratio'
+    'arrival_shock_ratio',
+
+    # --- 5. Hyper-Local Agro-Climatic Signals ---
+    'temp_max',
+    'temp_min',
+    'rainfall_mm',
+    'rainfall_anomaly_14d',
+    'soil_moisture_index',
+
+    # --- 6. Inter-State & Spatial Arbitrage ---
+    'interstate_price_diff',
+    'spatial_supply_shock_ratio',
+
+    # --- 7. Geopolitical & Global Trade Chokepoints ---
+    'export_bottleneck_impact',       # e.g., Red Sea / Hormuz index * freight rate
+    'brent_crude_fuel_impact',         # Fuel cost * transit distance
+    
+    # --- 8. Disaster Shocks & Policy Constraints ---
+    'effective_disaster_impact',       # Severity / Proximity decay
+    'net_policy_barrier'               # Export duty % minus MSP subsidy support
 ]
 
 TARGET = 'target_pct_2d'
@@ -63,7 +82,7 @@ TARGET = 'target_pct_2d'
 # ==========================================
 def get_xgb_model():
     return xgb.XGBRegressor(
-        n_estimators=1000,
+        n_estimators=1200,
         learning_rate=0.02,
         max_depth=6,
         min_child_weight=3,
@@ -77,7 +96,7 @@ def get_xgb_model():
 
 def get_lgb_model():
     return lgb.LGBMRegressor(
-        n_estimators=1000,
+        n_estimators=1200,
         learning_rate=0.02,
         num_leaves=63,
         max_depth=-1,
@@ -90,7 +109,7 @@ def get_lgb_model():
 
 def get_cat_model():
     return CatBoostRegressor(
-        iterations=1000,
+        iterations=1200,
         learning_rate=0.03,
         depth=6,
         loss_function="RMSE",
@@ -104,13 +123,14 @@ def get_cat_model():
 # 3. ENSEMBLE TRAINING & VALIDATION PIPELINE
 # ==========================================
 def train_ensemble_pipeline():
-    print("🌾 Loading engineered 25-year dataset...")
+    print("🌾 Loading engineered multi-factor dataset...")
     df = pd.read_parquet(PARQUET_PATH)
     
-    # Verify missing features
-    missing = [f for f in FEATURES if f not in df.columns]
-    if missing:
-        raise KeyError(f"Missing required columns in dataset: {missing}")
+    # Ensure all columns exist, fallback filling if external signals are missing
+    for col in FEATURES:
+        if col not in df.columns:
+            print(f"⚠️ Column '{col}' not found. Defaulting to 0.0.")
+            df[col] = 0.0
 
     X = df[FEATURES]
     y = df[TARGET]
@@ -119,7 +139,6 @@ def train_ensemble_pipeline():
     
     tscv = TimeSeriesSplit(n_splits=5)
     
-    # Track out-of-fold predictions for meta-blender training
     oof_xgb = np.zeros(len(df))
     oof_lgb = np.zeros(len(df))
     oof_cat = np.zeros(len(df))
@@ -134,14 +153,14 @@ def train_ensemble_pipeline():
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
         val_indices.extend(val_idx)
 
-        # 1. Train XGBoost
+        # 1. XGBoost
         model_xgb = get_xgb_model()
         model_xgb.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
         pred_xgb = model_xgb.predict(X_val)
         oof_xgb[val_idx] = pred_xgb
         print(f"  ✓ XGBoost Fold MAE:  {mean_absolute_error(y_val, pred_xgb) * 100:.2f}%")
 
-        # 2. Train LightGBM
+        # 2. LightGBM
         model_lgb = get_lgb_model()
         model_lgb.fit(
             X_train, y_train,
@@ -152,7 +171,7 @@ def train_ensemble_pipeline():
         oof_lgb[val_idx] = pred_lgb
         print(f"  ✓ LightGBM Fold MAE: {mean_absolute_error(y_val, pred_lgb) * 100:.2f}%")
 
-        # 3. Train CatBoost
+        # 3. CatBoost
         model_cat = get_cat_model()
         model_cat.fit(X_train, y_train, eval_set=(X_val, y_val), verbose=False)
         pred_cat = model_cat.predict(X_val)
@@ -171,7 +190,7 @@ def train_ensemble_pipeline():
         oof_cat[val_idx_arr]
     ])
     
-    # Train Ridge Meta-Model to find optimal model weights (constrained positive)
+    # Constrain weights to positive values
     meta_blender = Ridge(alpha=1.0, positive=True, fit_intercept=False)
     meta_blender.fit(meta_features, y_val_all)
     weights = meta_blender.coef_
@@ -180,13 +199,12 @@ def train_ensemble_pipeline():
     blended_oof_preds = meta_features @ normalized_weights
 
     # ==========================================
-    # 5. FINAL ACCURACY & DIRECTIONAL METRICS
+    # 5. BENCHMARK METRICS
     # ==========================================
     mae_xgb = mean_absolute_error(y_val_all, oof_xgb[val_idx_arr])
     mae_lgb = mean_absolute_error(y_val_all, oof_lgb[val_idx_arr])
     mae_cat = mean_absolute_error(y_val_all, oof_cat[val_idx_arr])
     mae_blend = mean_absolute_error(y_val_all, blended_oof_preds)
-    
     rmse_blend = np.sqrt(mean_squared_error(y_val_all, blended_oof_preds))
     
     direction_actual = np.sign(y_val_all)
@@ -209,12 +227,33 @@ def train_ensemble_pipeline():
     print(f"  • CatBoost Weight: {normalized_weights[2] * 100:.1f}%")
 
     # ==========================================
-    # 6. EXPORT PRODUCTION ARTIFACTS
+    # 6. FULL RETRAINING & ARTIFACT EXPORT
     # ==========================================
-    print("\n💾 Exporting ensemble model artifacts...")
-    model_xgb.save_model(os.path.join(MODEL_DIR, "xgb_model.json"))
-    model_lgb.booster_.save_model(os.path.join(MODEL_DIR, "lgb_model.txt"))
-    model_cat.save_model(os.path.join(MODEL_DIR, "cat_model.cbm"))
+    print("\n📦 Retraining models on full dataset for production...")
+    final_xgb = xgb.XGBRegressor(
+        n_estimators=1000, learning_rate=0.02, max_depth=6,
+        subsample=0.85, colsample_bytree=0.85, objective="reg:squarederror",
+        random_state=42, tree_method="hist"
+    )
+    final_xgb.fit(X, y, verbose=False)
+
+    final_lgb = lgb.LGBMRegressor(
+        n_estimators=1000, learning_rate=0.02, num_leaves=63,
+        subsample=0.85, colsample_bytree=0.85, objective="regression",
+        random_state=42, verbosity=-1
+    )
+    final_lgb.fit(X, y)
+
+    final_cat = CatBoostRegressor(
+        iterations=1000, learning_rate=0.03, depth=6,
+        loss_function="RMSE", random_seed=42, verbose=False
+    )
+    final_cat.fit(X, y, verbose=False)
+
+    print("💾 Saving production model artifacts...")
+    final_xgb.save_model(os.path.join(MODEL_DIR, "xgb_model.json"))
+    final_lgb.booster_.save_model(os.path.join(MODEL_DIR, "lgb_model.txt"))
+    final_cat.save_model(os.path.join(MODEL_DIR, "cat_model.cbm"))
     
     joblib.dump({
         "weights": normalized_weights,
@@ -223,7 +262,7 @@ def train_ensemble_pipeline():
         "mda_blend": mda_blend
     }, os.path.join(MODEL_DIR, "ensemble_meta.joblib"))
 
-    print(f"✅ All ensemble weights and models saved to '{MODEL_DIR}/'!")
+    print(f"✅ Production ensemble successfully exported to '{MODEL_DIR}/'!")
 
 if __name__ == "__main__":
     train_ensemble_pipeline()
